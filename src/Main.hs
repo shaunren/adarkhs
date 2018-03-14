@@ -28,9 +28,6 @@ import qualified Data.Set                    as S
 import           Data.Text                   (Text, toLower)
 import           Data.Time.Clock
 import           Foreign.JavaScript.Utils    (jsonDecode)
-import           JSDOM                       (currentWindow)
-import           JSDOM.Storage               (getItem, setItem)
-import           JSDOM.Window                (getLocalStorage)
 import           Language.Javascript.JSaddle (JSM, JSString, JSVal, liftJSM,
                                               textToJSString, toJSVal)
 

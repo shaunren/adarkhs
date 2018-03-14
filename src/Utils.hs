@@ -11,10 +11,14 @@ import           Data.Aeson.Text             (encodeToLazyText)
 import           Data.Text                   (Text, replace)
 import           Data.Text.Lazy              (toStrict)
 import           Data.Word
-import           Language.Javascript.JSaddle (FromJSVal, JSM, JSString, JSVal,
-                                              ToJSVal, liftJSM,
-                                              textToJSString,
+import           Language.Javascript.JSaddle (FromJSString, JSM, JSString, JSVal,
+                                              ToJSString,
+                                              liftJSM,
+                                              textToJSString, toJSString,
                                               toJSVal, fromJSVal)
+import           JSDOM                       (currentWindow)
+import           JSDOM.Storage               (getItem, setItem)
+import           JSDOM.Window                (getLocalStorage)
 import           JSDOM.Types                 (Nullable(..), nullableToMaybe)
 import           Reflex
 import           TextShow
@@ -48,21 +52,38 @@ jsonEncode = return . textToJSString . toStrict . encodeToLazyText
 #endif
 
 
--- TODO: implement wrappers for GHC
+getLocalStorageItem :: FromJSString a => JSString -> JSM (Maybe a)
+setLocalStorageItem :: ToJSString a => JSString -> a -> JSM ()
 
-getLocalStorageItem :: FromJSVal a => JSString -> JSM (Maybe a)
+#ifdef ghcjs_HOST_OS
+
+{-# INLINE getLocalStorageItem #-}
 getLocalStorageItem key = do
   Nullable jsval <- getLocalStorageItem_ key
   nullableToMaybe jsval
 
-foreign import javascript unsafe "window.localStorage.getItem($1)"
-  getLocalStorageItem_ :: JSString -> JSM (Nullable JSVal)
+{-# INLINE setLocalStorageItem #-}
+setLocalStorageItem key val = setLocalStorageItem_ key (toJSString val)
 
-setLocalStorageItem :: ToJSVal a => JSString -> a -> JSM ()
-setLocalStorageItem key val = setLocalStorageItem_ key =<< toJSVal val
+foreign import javascript unsafe "window.localStorage.getItem($1)"
+  getLocalStorageItem_ :: JSString -> JSM (Nullable JSString)
 
 foreign import javascript unsafe "window.localStorage.setItem($1, $2);"
-  setLocalStorageItem_ :: JSString -> JSVal -> JSM ()
+  setLocalStorageItem_ :: JSString -> JSString -> JSM ()
+
+#else
+
+getLocalStorageItem key = do
+  Just window <- currentWindow
+  ls <- getLocalStorage window
+  getItem ls key
+
+setLocalStorageItem key val = do
+  Just window <- currentWindow
+  ls <- getLocalStorage window
+  setItem ls key val
+
+#endif
 
 
 infixr 4 ?+~, ?-~
