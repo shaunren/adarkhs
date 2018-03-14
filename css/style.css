@@ -1,0 +1,292 @@
+/* From A Dark Room's css files
+   Copyright (c) A Dark Room authors.
+*/
+
+
+html {
+    height: 100%;
+}
+
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body, .tooltip, select.menuButton {
+    font-family: "Times New Roman", Times, serif;
+    font-size: 16px;
+    font-weight: normal;
+    line-height: normal;
+    letter-spacing: normal;
+}
+
+::selection {
+    background-color: transparent;
+}
+
+::-moz-selection {
+    background-color: transparent;
+}
+
+.description textarea::selection {
+    background-color: gray;
+}
+
+.description textarea::-moz-selection {
+    background-color: gray;
+}
+
+/* Menu */
+div.menu {
+    position: fixed;
+    right: 10%;
+    bottom: 10px;
+    color: #666;
+    z-index: 10;
+}
+
+div.menu span {
+    cursor: pointer;
+    float: right;
+    margin-left: 20px;
+}
+
+/* Framework stuff */
+
+div.clear {
+    clear: both;
+}
+
+div.wrapper {
+    margin: auto;
+    width: 700px;
+    padding: 20px 0 0 220px;
+    position: relative;
+}
+
+div.saveNotify {
+    position: absolute;
+    top: 20px;
+    right: 0px;
+    background: white;
+    opacity: 0;
+}
+
+div.content {
+    position: relative;
+    overflow: hidden;
+    height: 700px;
+}
+
+div.header {
+    padding-bottom: 20px;
+    height: 20px;
+}
+
+div.headerButton {
+    font-size: 18px;
+    cursor: pointer;
+    float: left;
+    border-left: 1px solid black;
+    margin-left: 10px;
+    padding-left: 10px;
+}
+
+div.headerButton:hover {
+    text-decoration: underline;
+}
+
+div.headerButton:first-child {
+    border-left: none;
+    margin-left: 0px;
+    padding-left: 0px;
+}
+
+div.headerButton.selected, div.headerButton.selected:hover {
+    cursor: default;
+    text-decoration: underline;
+}
+
+div.location {
+    position: relative;
+    float: left;
+    width: 700px;
+}
+
+
+/* Notifications */
+
+div.notifications {
+    position: absolute;
+    top: 20px;
+    left: 0px;
+    height: 700px;
+    width: 200px;
+    overflow: hidden;
+}
+
+div.notifications div.notification {
+    margin-bottom: 10px;
+}
+
+div.notifyGradient {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    height: 100%;
+    width: 100%;
+    background-color: white;
+    background: -webkit-linear-gradient(
+	rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 1) 100%
+    );
+    background: linear-gradient(
+	rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 1) 100%
+    );
+    filter: alpha(
+	Opacity=0, FinishOpacity=100, Style=1, StartX=0, StartY=0, FinishX=0, FinishY=500
+    );
+}
+
+
+/* Button */
+
+div.button {
+    position: relative;
+    text-align: center;
+    border: 1px solid black;
+    width: 80px;
+    margin-bottom: 5px;
+    padding: 5px 10px;
+    cursor: pointer;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+div.button:hover {
+    text-decoration: underline;
+}
+
+div.button.disabled, div.button.disabled:hover {
+    cursor: default;
+    border-color: #b2b2b2;
+    color: #b2b2b2;
+    text-decoration: none;
+}
+
+div.button div.cooldown {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    z-index: -1;
+    height: 100%;
+    background-color: #DDDDDD;
+}
+
+div.button div.tooltip {
+    width: 100px;
+}
+
+
+/* Room Tab */
+div.roomButtonCol {
+    width: 23%;
+    float: left;
+}
+
+div.roomButtonCol h1 {
+    margin-bottom: 5px;
+    font-weight: inherit;
+    font-size: inherit;
+}
+
+.hidden {
+    visibility: hidden;
+}
+
+/* Stores container */
+div.storesCol {
+    position: absolute;
+    top: 0px;
+    right: 0px;
+    width: 29%;
+}
+
+div.storesCol fieldset {
+    position: relative;
+    z-index: 10;
+    border: 1px solid black;
+    cursor: default;
+    padding: 5px 10px;
+}
+
+
+div.storeRow {
+    position: relative;
+}
+
+div.rowkey {
+    clear: both;
+    float: left;
+}
+
+div.rowval {
+    float: right;
+}
+
+div.weapons {
+    margin-top: 15px;
+    position: relative;
+    right: 0px;
+    border: 1px solid black;
+    cursor: default;
+    padding: 5px 10px;
+    width: 200px;
+}
+
+/* Tooltip */
+
+div.tooltip {
+    display: none;
+    padding: 2px 5px;
+    border: 1px solid black;
+    position: absolute;
+    box-shadow: -1px 3px 2px #666;
+    background: white;
+    z-index: 999;
+}
+
+.tooltip.bottom {
+    top: 30px;
+}
+
+.tooltip.right {
+    left: 2px;
+}
+
+.tooltip.left {
+    right: 0px;
+}
+
+.tooltip.top {
+    bottom: 20px;
+}
+
+*:hover > div.tooltip {
+    display: block;
+}
+
+div.tooltip:hover {
+    display: none !important;
+}
+
+.disabled:hover > div.tooltip, .button.free:hover > div.tooltip {
+    display: none;
+}
+
+#event .button.disabled:hover > div.tooltip {
+    display: block;
+}

@@ -1,0 +1,49 @@
+resolver: lts-8.11
+compiler: ghcjs-0.2.1.9008011_ghc-8.0.2
+compiler-check: match-exact
+
+setup-info:
+  ghcjs:
+    source:
+      ghcjs-0.2.1.9008011_ghc-8.0.2:
+        url: https://github.com/matchwood/ghcjs-stack-dist/raw/master/ghcjs-0.2.1.9008011.tar.gz
+        sha1: a72a5181124baf64bcd0e68a8726e65914473b3b
+
+packages:
+- location: '.'
+- location:
+    git: https://github.com/reflex-frp/reflex
+    commit: 6a8c4efe9a181cc2d97900f5a7519c46cb13e0bb
+    # Latest develop comment at the time of writing
+  extra-dep: true
+- location:
+    git: https://github.com/reflex-frp/reflex-dom
+    commit: f4820df681b177fb950eb180aa97a81f855bd2aa
+    # Latest develop comment at the time of writing
+    subdirs:
+    - reflex-dom-core
+    - reflex-dom
+  extra-dep: true
+- location:
+    git: https://github.com/reflex-frp/reflex-dom-contrib
+    commit: b47f90c810c838009bf69e1f8dacdcd10fe8ffe3
+  extra-dep: true
+
+ghc-options:
+  "$everything": -O2
+
+flags:
+  reflex-dom-core:
+    profile-reflex: false
+
+extra-deps: 
+- dependent-sum-template-0.0.0.6
+- ghcjs-dom-0.9.2.0
+- ghcjs-dom-jsaddle-0.9.2.0
+- ghcjs-dom-jsffi-0.9.2.0
+- jsaddle-0.9.3.0
+- jsaddle-dom-0.9.2.0
+- prim-uniq-0.1.0.1
+- ref-tf-0.4.0.1
+- zenc-0.1.1
+- strict-writer-0.4.0.0

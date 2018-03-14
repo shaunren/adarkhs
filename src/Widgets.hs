@@ -1,0 +1,239 @@
+{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE RecursiveDo            #-}
+{-# LANGUAGE ScopedTypeVariables    #-}
+{-# LANGUAGE TemplateHaskell        #-}
+
+module Widgets where
+
+import           Control.Applicative        (liftA3)
+import           Control.Lens
+import           Control.Monad              (when)
+import           Control.Monad.Fix
+import           Control.Monad.IO.Class
+import           Control.Monad.Reader.Class
+import           Control.Monad.Writer.Class
+import           Data.Default
+import qualified Data.Map                   as M
+import           Data.Maybe                 (isJust, listToMaybe)
+import           Data.Monoid                ((<>))
+import           Data.Time.Clock
+import           Data.Text                  (Text)
+import qualified Data.Text                  as T
+import           Reflex.Dom                 hiding (button)
+import           TextShow
+
+import           State
+import           Utils
+
+-- | A widget to construct a tabbed view that shows only one of its child widgets at a time.
+--   Creates a header bar containing a <div> with one <div> per child; clicking a <div> displays
+--   the corresponding child and hides all others.
+--
+--   This variant allows dynamic visibility of the tabs.
+tabDisplayDyn :: forall t m k. (MonadFix m, DomBuilder t m, MonadHold t m, PostBuild t m, Ord k)
+  => Text               -- ^ Class applied to the tab itself
+  -> Text               -- ^ Class applied to tab button elements
+  -> Text               -- ^ Class applied to currently selected tab button element
+  -> Text               -- ^ Class applied to child div
+  -> (M.Map k (Dynamic t Text, Dynamic t Bool, m ())) -- ^ Map from (arbitrary) key to (tab label, isVisible, child widget)
+  -> m (M.Map k (Dynamic t Bool)) -- ^ Map from key to Dynamic isSelected
+tabDisplayDyn tabClass tabButtonClass selectedClass childClass tabItems = do
+  let t0 = listToMaybe $ M.keys tabItems
+  rec currentTab :: Demux t (Maybe k) <- elAttr "div" ("class" =: tabClass) $ do
+        tabClicksList :: [Event t k] <- M.elems <$> imapM (\k (s,a,_) -> headerBarLink s k a $ demuxed currentTab (Just k)) tabItems
+        let eTabClicks :: Event t k = leftmost tabClicksList
+        fmap demux $ holdDyn t0 $ fmap Just eTabClicks
+
+      isSelectedMap <- elClass "div" childClass $
+        iforM tabItems $ \k (_,_,w) -> do
+          let isSelected = demuxed currentTab $ Just k
+              attrs = ffor isSelected $ \s -> monoidGuard (not s) ("style" =: "display:none;")
+          elDynAttr "div" attrs w
+          return isSelected
+
+  return isSelectedMap
+
+  where
+    headerBarLink :: Dynamic t Text -> k -> Dynamic t Bool -> Dynamic t Bool -> m (Event t k)
+    headerBarLink x k isVisible isSelected = do
+      let attrs = zipDynWith (\v s -> monoidGuard (not v) ("style" =: "display:none;")
+                                   <> ("class" =: (tabButtonClass <> monoidGuard s (" " <> selectedClass))))
+                           isVisible isSelected
+      (l,_) <- elDynAttr' "div" attrs $ dynText x
+      return $ k <$ domEvent Click l
+
+-- | A text notifications pane.
+notificationsPane ::(MonadWidget t m) => Event t [Text] -> m ()
+notificationsPane notification = do
+  notifications <- foldDyn (\n ns -> take maxNotifications . filter (not . T.null) $ n ++ ns) [] notification
+  elClass "div" "notifications" $ do
+    simpleList notifications $ elClass "div" "notification" . dynText
+    elClass "div" "notifyGradient" blank
+  return ()
+
+  where maxNotifications = 32
+
+{-# INLINABLE dynWidget #-}
+dynWidget :: (MonadWidget t m) => Dynamic t Bool -> m () -> m (Event t ())
+dynWidget isVisible widget = dyn $ w <$> isVisible
+  where w False = return ()
+        w True  = widget
+
+{-# INLINABLE dynWidget' #-}
+dynWidget' :: (MonadWidget t m) => Dynamic t Bool -> m (Event t a) -> m (Event t a)
+dynWidget' isVisible widget = do
+  evW <- dyn $ w <$> isVisible
+  return $ coincidence evW
+
+  where w False = return never
+        w True  = widget
+
+data ButtonConfig t = ButtonConfig
+  { _buttonConfigLabel        :: !(Dynamic t Text)
+  , _buttonConfigCooldownSecs :: !(Dynamic t Float)
+  , _buttonConfigVisible      :: !(Dynamic t Bool)
+  , _buttonConfigEnabled      :: !(Dynamic t Bool)
+  , _buttonConfigTooltipRows  :: !(Dynamic t (M.Map Text Word))
+  }
+
+makeFields ''ButtonConfig
+
+
+instance Reflex t => Default (ButtonConfig t) where
+  {-# INLINABLE def #-}
+  def = ButtonConfig "button" (constDyn 0) (constDyn True) (constDyn True) (constDyn M.empty)
+
+-- | A div button with a cooldown bar.
+button :: (MonadWidget t m, MonadReader (GameConfig t) m) => ButtonConfig t -> m (Event t ())
+button cfg = do
+  evTick <- asks (^.cooldownTick)
+  -- TODO: better initial value for tLastClick
+  t0 <- ((-1000) `addUTCTime`) <$> liftIO getCurrentTime
+  rec
+    -- Behavior t Float : UTC time of last click event
+    tLastClick <- hold t0 =<< (performEvent . ffor evClick $ const $ liftIO getCurrentTime)
+    -- Dynamic t Float : (approximate) time passed since click
+    dtSinceLastClick <- holdDyn ((1/0) :: Float) $
+                          attachWith (\tl tickInfo -> realToFrac $ (_tickInfo_lastUTC tickInfo) `diffUTCTime` tl)
+                                     tLastClick evTick
+
+    let curCooldown = zipDynWith (\cs dt -> max 0 (cs-dt)) (cfg^.cooldownSecs) dtSinceLastClick
+        clicksAllowed = zipDynWith (\e c -> e && c <= 0) (cfg^.enabled) curCooldown
+        attrs = zipDynWith (\v e -> monoidGuard (not v) ("style" =: "display:none;")
+                                      <> ("class" =: (   "button" <> monoidGuard (not e) (" disabled"))))
+                             (cfg^.visible) clicksAllowed
+
+    (e,_) <- elDynAttr' "div" attrs $ do
+      dynText $ cfg^.label
+
+      -- Cooldown bar
+      let cooldownAttrs = zipDynWith (\cur cs -> ("class" =: "cooldown")
+                                                 <> monoidGuard (cur>0)
+                                                                ("style" =: (
+                                                                   "width: " <> showt (cur*100/cs) <> "%; overflow: hidden;")))
+                                     curCooldown (cfg^.cooldownSecs)
+
+      elDynAttr "div" cooldownAttrs blank
+
+      -- Tooltip
+      dynWidget ((not . M.null) <$> cfg^.tooltipRows) $ elClass "div" "tooltip bottom right" $ do
+        listWithKey (cfg^.tooltipRows) $ \k dynV -> do
+          elClass "div" "rowkey" $ text k
+          elClass "div" "rowval" $ dynText $ showt <$> dynV
+        return ()
+
+    let evClick = gate (current clicksAllowed) $ domEvent Click e
+  return evClick
+
+
+data CraftButtonConfig = CraftButtonConfig
+  { _craftButtonConfigBuildingType   :: BuildingType
+  , _craftButtonConfigMaxCraftAmount :: Word
+  , _craftButtonConfigAvailableMsg   :: Maybe Text
+  , _craftButtonConfigBuildMsg       :: Maybe Text
+  , _craftButtonConfigMaxMsg         :: Maybe Text
+  , _craftButtonConfigCraftCost      :: Buildings -> Stores
+  }
+
+makeFields ''CraftButtonConfig
+
+instance Default CraftButtonConfig where
+  {-# INLINABLE def #-}
+  def = CraftButtonConfig undefined 0 Nothing Nothing Nothing undefined
+
+craftButton :: MonadGame t m => CraftButtonConfig -> m ()
+craftButton cfg = do
+  dynBuildings <- asksGameState buildings
+  dynStores    <- asksGameState stores
+
+  dynCost <- holdUniqDyn $ cfg^.craftCost <$> dynBuildings
+
+  let numCrafted = dynBuildings <&> (^. at bdgType . non 0)
+      -- Show button if one has already been built, or
+      -- we have >= 1/2 * Wood, and all other components have been seen.
+      isAvailable' = liftA3 (\a w s -> a || (w && s)) alreadyBuilt halfWood seenComponents
+      alreadyBuilt = dynBuildings <&> (has $ ix bdgType)
+      halfWood = zipDynWith (\c s -> (s ^. at Wood . non 0) * 2 >= (c ^. at Wood . non 0)) dynCost dynStores
+      seenComponents = zipDynWith (M.isSubmapOfBy (\_ _ -> True)) dynCost dynStores
+
+  -- Once available, always stay available.
+  isAvailable <- holdUniqDynBy (\new old -> not (new && not old)) isAvailable'
+
+  lessThanMax <- holdUniqDyn $ numCrafted <&> (< cfg^.maxCraftAmount)
+
+  -- Show available/max messages
+  evAvailable <- delay 0 $ updated isAvailable -- FIXME: causality loop hack
+  tellMsg evAvailable $ cfg^.availableMsg
+
+  evBuild <- button $ def & label       .~ constDyn (toSpaceCase $ showt bdgType)
+                          & visible     .~ isAvailable
+                          & enabled     .~ lessThanMax
+                          & tooltipRows .~ fmap (M.mapKeys showRowKey) dynCost
+
+  performAction evBuild $ \st -> do
+    -- Craft the building if there are enough materials
+    let cost = (cfg^.craftCost) (st^.buildings)
+        ss   = st^.stores
+        hasEnoughMaterials = cost `isSubmapOfByLT` ss
+
+    if st^.roomTemp <= Cold
+      then do
+        tell ["builder just shivers."]
+        return st
+    else if hasEnoughMaterials
+      then do
+        when (isJust (cfg^.maxMsg) && (st^.buildings . at bdgType . non 0) == cfg^.maxCraftAmount - 1) $
+          let Just msg = cfg^.maxMsg in tell [msg]
+        when (isJust (cfg^.buildMsg)) $
+          let Just msg = cfg^.buildMsg in tell [msg]
+
+        return $ st & stores    .~ M.differenceWith (\a b -> Just (a-b)) ss cost
+                    & buildings . at bdgType . non 0 +~ 1
+    else do
+        tell ["not enough materials."]
+        return st
+  where
+    bdgType = cfg^.buildingType
+
+    isSubmapOfByLT = M.isSubmapOfBy (<=)
+
+    tellMsg ev maybeMsg =
+      when (isJust maybeMsg) $
+        let Just msg = maybeMsg
+        in  performAction ev  $ \s -> tell [msg] >> return s
+
+
+
+storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k) => Text -> Text -> Dynamic t (M.Map k Word) -> m ()
+storesFieldset className legend itemsMap = elClass "fieldset" className $ do
+  el "legend" $ text legend
+  listWithKey itemsMap $ \k dynV ->
+    elClass "div" "storeRow" $ do
+      elClass "div" "rowkey" $ text (showRowKey k)
+      elClass "div" "rowval" $ dynText $ showt <$> dynV
+  return ()
