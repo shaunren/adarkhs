@@ -43,4 +43,4 @@ executable adarkhs
     ghc-options:    -O2 -Wall
 
   if flag(debug)
-    ghc-options:    -DDEBUG
+    cpp-options:    -DDEBUG

@@ -91,12 +91,13 @@ data GameState = GameState
   , _gameStateCooldown         :: !CooldownMap
   , _gameStateStores           :: !Stores
   , _gameStateBuildings        :: !Buildings
+  , _gameStateBuildingsAvailable :: !(S.Set BuildingType)
   } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
 
 makeFields ''GameState
 
 instance Default GameState where
-  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE [] [] []
+  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE [] [] [] []
 
 data GameConfig t = GameConfig
   { _gameConfigCooldownTick :: Event t TickInfo

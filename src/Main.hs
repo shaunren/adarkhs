@@ -163,20 +163,19 @@ body = do
 
   elClass "div" "wrapper" $ do
     rec
-      (isSelectedMap, evUserAction) <- fmap (_2 %~ fmapMaybe listToMaybe) $
-        runGameT (GameConfig cooldownTick dynState) $
-          tabDisplayDyn "header" "headerButton" "selected" "main" $ M.fromList
-            [ (Room,    ( describeRoom <$> dynFireLevel
-                        , constDyn True
-                        , roomTab) )
-            , (Village, ( dynState <&> (\s -> describeVillage $ s ^. buildings)
-                        , (Village `S.member`) <$> dynAllowedLocations
-                        , villageTab) )
-            ]
+      (isSelectedMap, evUserActions) <- runGameT (GameConfig cooldownTick dynState) $
+        tabDisplayDyn "header" "headerButton" "selected" "main" $ M.fromList
+          [ (Room,    ( describeRoom <$> dynFireLevel
+                      , constDyn True
+                      , roomTab) )
+          , (Village, ( dynState <&> (\s -> describeVillage $ s ^. buildings)
+                      , (Village `S.member`) <$> dynAllowedLocations
+                      , villageTab) )
+          ]
 
       adjustBuilderTick <- tickLossyFrom adjustBuilderDelay t0 (updated dynStokedForFirstTime)
       (dynState, dynActionMsgs) <- fmap splitDynPure $ foldDyn foldFun (def, []) $ mergeWith (>=>)
-        [ evUserAction
+        [ (foldl1 (>=>)) <$> evUserActions
         , coolFire <$ evCoolFire
         , adjustRoomTemp <$ adjustRoomTempTick
         , adjustBuilderLevel <$ adjustBuilderTick

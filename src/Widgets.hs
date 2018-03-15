@@ -21,6 +21,7 @@ import           Data.Default
 import qualified Data.Map                   as M
 import           Data.Maybe                 (isJust, listToMaybe)
 import           Data.Monoid                ((<>))
+import qualified Data.Set                   as S
 import           Data.Time.Clock
 import           Data.Text                  (Text)
 import qualified Data.Text                  as T
@@ -168,27 +169,30 @@ instance Default CraftButtonConfig where
 
 craftButton :: MonadGame t m => CraftButtonConfig -> m ()
 craftButton cfg = do
+  dynState     <- asks (^.gameState)
   dynBuildings <- asksGameState buildings
   dynStores    <- asksGameState stores
 
-  dynCost <- holdUniqDyn $ cfg^.craftCost <$> dynBuildings
+  let dynCost' = cfg^.craftCost <$> dynBuildings
+  dynCost <- holdUniqDyn dynCost'
 
   let numCrafted = dynBuildings <&> (^. at bdgType . non 0)
-      -- Show button if one has already been built, or
-      -- we have >= 1/2 * Wood, and all other components have been seen.
-      isAvailable' = liftA3 (\a w s -> a || (w && s)) alreadyBuilt halfWood seenComponents
-      alreadyBuilt = dynBuildings <&> (has $ ix bdgType)
-      halfWood = zipDynWith (\c s -> (s ^. at Wood . non 0) * 2 >= (c ^. at Wood . non 0)) dynCost dynStores
-      seenComponents = zipDynWith (M.isSubmapOfBy (\_ _ -> True)) dynCost dynStores
-
-  -- Once available, always stay available.
-  isAvailable <- holdUniqDynBy (\new old -> not (new && not old)) isAvailable'
 
   lessThanMax <- holdUniqDyn $ numCrafted <&> (< cfg^.maxCraftAmount)
 
+  let isAvailable = isAvail <$> dynState
+
   -- Show available/max messages
-  evAvailable <- delay 0 $ updated isAvailable -- FIXME: causality loop hack
-  tellMsg evAvailable $ cfg^.availableMsg
+  -- FIXME: evAvailable seems to never fire
+  evAvailable <- fmap (traceEvent $ "evAvail-" <> show bdgType) $
+    delay 0 $ updated isAvailable
+  performAction evAvailable $ \st ->
+    if st^.buildingsAvailable & has (ix bdgType)
+      then return st
+      else do
+        when (isJust (cfg^.availableMsg)) $
+          let Just msg = cfg^.availableMsg in tell [msg]
+        return $ st & buildingsAvailable %~ S.insert bdgType
 
   evBuild <- button $ def & label       .~ constDyn (toSpaceCase $ showt bdgType)
                           & visible     .~ isAvailable
@@ -217,17 +221,22 @@ craftButton cfg = do
     else do
         tell ["not enough materials."]
         return st
+  -- performAction uses tellEvent from EventWriter.
+
   where
     bdgType = cfg^.buildingType
 
     isSubmapOfByLT = M.isSubmapOfBy (<=)
 
-    tellMsg ev maybeMsg =
-      when (isJust maybeMsg) $
-        let Just msg = maybeMsg
-        in  performAction ev  $ \s -> tell [msg] >> return s
-
-
+    -- Show button if one has already been built, or
+    -- we have >= 1/2 * Wood, and all other components have been seen.
+    isAvail :: GameState -> Bool
+    isAvail st =  (st^.buildingsAvailable & has (ix bdgType))
+               || ((s ^. at Wood . non 0) * 2 >= (c ^. at Wood . non 0)
+                   && M.isSubmapOfBy (\_ _ -> True) c s)
+      where s = st^.stores
+            b = st^.buildings
+            c = (cfg^.craftCost) b
 
 storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k) => Text -> Text -> Dynamic t (M.Map k Word) -> m ()
 storesFieldset className legend itemsMap = elClass "fieldset" className $ do
