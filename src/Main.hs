@@ -33,13 +33,17 @@ import           Language.Javascript.JSaddle (JSM, JSString, JSVal, liftJSM,
                                               textToJSString, toJSVal)
 
 import           Reflex.Dom                  hiding (button)
-
+import           TextShow
 
 import           State
 import           Utils
 import           Widgets
 
+
 --------------------------------------------------------------------------------------------------------------------------------------
+hutCapacity :: Int
+hutCapacity = 4
+
 describeRoom :: FireLevel -> Text
 describeRoom fl
     | fl == minBound = "A Dark Room"
@@ -365,7 +369,7 @@ roomTab = elClass "div" "location" $ do
 
   dynAllowedLocations <- holdUniqDyn =<< asksGameState allowedLocations
   dynWidget ((Village `S.member`) <$> dynAllowedLocations) $ elClass "div" "storesCol" $
-    storesFieldset "stores" (constDyn "stores") =<< holdUniqDyn =<< asksGameState stores
+    storesFieldset "stores" (constDyn "stores") Nothing =<< holdUniqDyn =<< asksGameState stores
 
   return ()
 
@@ -392,10 +396,13 @@ villageTab = elClass "div" "location" $ do
                  & cooldownSecs .~ constDyn gatherWoodCooldown
   performAction evGatherWood gatherWood
 
-  dynBuildings <- holdUniqDyn =<< asksGameState buildings
+  dynBuildings  <- holdUniqDyn =<< asksGameState buildings
+  dynPopulation <- holdUniqDyn =<< asksGameState population
+  let dynHuts = dynBuildings <&> (^. at Hut . non 0)
+
   elClass "div" "storesCol" $ do
-    storesFieldset "stores" (buildingsLegend <$> dynBuildings) dynBuildings
-    storesFieldset "stores" (constDyn "stores") =<< holdUniqDyn =<< asksGameState stores
+    storesFieldset "stores" (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildings
+    storesFieldset "stores" (constDyn "stores") Nothing =<< holdUniqDyn =<< asksGameState stores
   return ()
 
   where
@@ -405,8 +412,9 @@ villageTab = elClass "div" "location" $ do
     gatherWoodCooldown = 60
 #endif
 
-    buildingsLegend b
+    buildingsLegend h
       | h <= 0    = "forest"
       | h == 1    = "hut"
       | otherwise = "village"
-      where h = b ^. at Hut . non 0
+
+    populationLegend h p = "pop " <> showt p <> "/" <> showt (h * hutCapacity)

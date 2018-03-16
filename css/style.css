@@ -223,6 +223,13 @@ div.storesCol fieldset {
     padding: 5px 10px;
 }
 
+fieldset span.legend2 {
+    position: absolute;
+    top: -2.5ex;
+    right: 10px;
+    background: white;
+}
+
 
 div.storeRow {
     position: relative;

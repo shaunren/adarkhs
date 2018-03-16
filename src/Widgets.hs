@@ -18,7 +18,7 @@ import           Control.Monad.Reader.Class
 import           Control.Monad.Writer.Class
 import           Data.Default
 import qualified Data.Map                   as M
-import           Data.Maybe                 (isJust, listToMaybe)
+import           Data.Maybe                 (isJust, fromJust, listToMaybe)
 import           Data.Monoid                ((<>))
 import qualified Data.Set                   as S
 import           Data.Time.Clock
@@ -243,9 +243,11 @@ craftButton cfg = do
             c = (cfg^.craftCost) b
 
 storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k, TextShow v)
-               => Text -> Dynamic t Text -> Dynamic t (M.Map k v) -> m ()
-storesFieldset className legend itemsMap = elClass "fieldset" className $ do
+               => Text -> Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k v) -> m ()
+storesFieldset className legend maybeLegend2 itemsMap = elClass "fieldset" className $ do
   el "legend" $ dynText legend
+  when (isJust maybeLegend2) $
+    elClass "span" "legend2" $ dynText (fromJust maybeLegend2)
   listWithKey itemsMap $ \k dynV ->
     elClass "div" "storeRow" $ do
       elClass "div" "rowkey" $ text (showRowKey k)

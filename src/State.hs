@@ -106,6 +106,7 @@ data GameState = GameState
   , _gameStateTimesFireStoked  :: !Word
   , _gameStateRoomTemp         :: !RoomTempLevel
   , _gameStateBuilderLevel     :: !BuilderLevel
+  , _gameStatePopulation       :: !Int
   , _gameStateCooldown         :: !CooldownMap
   , _gameStateStores           :: !Stores
   , _gameStateBuildings        :: !Buildings
@@ -117,7 +118,7 @@ makeFields ''GameState
 
 instance Default GameState where
   {-# INLINE def #-}
-  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE [] [] [] [] []
+  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE 0 [] [] [] [] []
 
 data GameConfig t = GameConfig
   { _gameConfigAnimationTick :: Event t TickInfo
