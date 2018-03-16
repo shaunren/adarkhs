@@ -180,12 +180,19 @@ craftButton cfg = do
 
   lessThanMax <- holdUniqDyn $ numCrafted <&> (< cfg^.maxCraftAmount)
 
-  let isAvailable = isAvail <$> dynState
+  evPostBuild <- delay 0 =<< getPostBuild
 
-  -- Show available/max messages
-  -- FIXME: evAvailable seems to never fire
-  evAvailable <- fmap (traceEvent $ "evAvail-" <> show bdgType) $
-    delay 0 $ updated isAvailable
+  let isAvailable' = isAvail <$> dynState
+      evAvailable' = leftmost
+        [ attachWithMaybe (\old new -> if new && not old then Just True else Nothing)
+                          (current isAvailable') (updated isAvailable')
+        , ffilter id $ current isAvailable' <@ evPostBuild
+        ]
+
+  isAvailable <- holdDyn False evAvailable'
+
+  evAvailable <- performEvent $ ffor evAvailable' $ const $ return ()
+
   performAction evAvailable $ \st ->
     if st^.buildingsAvailable & has (ix bdgType)
       then return st
@@ -193,6 +200,7 @@ craftButton cfg = do
         when (isJust (cfg^.availableMsg)) $
           let Just msg = cfg^.availableMsg in tell [msg]
         return $ st & buildingsAvailable %~ S.insert bdgType
+
 
   evBuild <- button $ def & label       .~ constDyn (toSpaceCase $ showt bdgType)
                           & visible     .~ isAvailable

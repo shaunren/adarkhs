@@ -241,14 +241,15 @@ body = do
 
 roomTab :: MonadGame t m => m ()
 roomTab = elClass "div" "location" $ do
-  dynFireLevel <- asksGameState fireLevel
+  dynFireLevel <- holdUniqDyn =<< asksGameState fireLevel
   dynStores    <- asksGameState stores
 
   evStokeFire <-
     button $ def & label        .~ fmap fireBtnLabel dynFireLevel
                  & cooldownSecs .~ fmap (\s -> if (s ^. at Wood . non 1) > 0 then stokeCooldown else 0) dynStores
   performAction evStokeFire stokeFire
-  dynBuilderLevel   <- fmap (fmap (^.builderLevel)) $ asks (^.gameState)
+
+  dynBuilderLevel <- holdUniqDyn =<< (fmap (fmap (^.builderLevel)) $ asks (^.gameState))
   buttonCol (dynBuilderLevel <&> (>= BuilderWorking)) $ do
     el "h1" $ text "build:"
 
