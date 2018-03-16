@@ -66,19 +66,37 @@ instance NotifyShow BuilderLevel where
   showN BuilderSleeping  = "the stranger in the corner stops shivering. her breathing calms."
   showN BuilderWorking   = "the stranger is standing by the fire. she says she can help. says she builds things."
 
-data StoreType = Wood | Fur
+data StoreType = Wood | Fur | Meat | Scales | Leather | Iron | Coal | Steel | Sulphur
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 $(deriveTextShow ''StoreType)
 
 
-data BuildingType = Cart | Hut | Trap
+data BuildingType = Hut | Cart | Trap | Lodge | TradingPost | Tannery | Smokehouse | Workshop | Steelworks | Armoury
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 $(deriveTextShow ''BuildingType)
 
-type Stores = M.Map StoreType Word
-type Buildings = M.Map BuildingType Word
+type Stores = M.Map StoreType Int
+type Buildings = M.Map BuildingType Int
+
+data IncomeSource = Builder | Gatherer
+  deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
+
+$(deriveTextShow ''IncomeSource)
+
+data IncomeValue = IncomeValue
+  { _incomeValueStores    :: !Stores
+  , _incomeValueTicksLeft :: !Int
+  } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
+
+makeFields ''IncomeValue
+
+instance Default IncomeValue where
+  {-# INLINE def #-}
+  def = IncomeValue [] 0
+
+type Incomes = M.Map IncomeSource IncomeValue
 
 data GameState = GameState
   { _gameStateCurrentLocation  :: !Location
@@ -92,16 +110,18 @@ data GameState = GameState
   , _gameStateStores           :: !Stores
   , _gameStateBuildings        :: !Buildings
   , _gameStateBuildingsAvailable :: !(S.Set BuildingType)
+  , _gameStateIncomes          :: !Incomes
   } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
 
 makeFields ''GameState
 
 instance Default GameState where
-  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE [] [] [] []
+  {-# INLINE def #-}
+  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE [] [] [] [] []
 
 data GameConfig t = GameConfig
-  { _gameConfigCooldownTick :: Event t TickInfo
-  , _gameConfigGameState    :: Dynamic t GameState
+  { _gameConfigAnimationTick :: Event t TickInfo
+  , _gameConfigGameState     :: Dynamic t GameState
   }
 
 makeFields ''GameConfig

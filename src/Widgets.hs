@@ -10,7 +10,6 @@
 
 module Widgets where
 
-import           Control.Applicative        (liftA3)
 import           Control.Lens
 import           Control.Monad              (when)
 import           Control.Monad.Fix
@@ -99,7 +98,7 @@ data ButtonConfig t = ButtonConfig
   , _buttonConfigCooldownSecs :: !(Dynamic t Float)
   , _buttonConfigVisible      :: !(Dynamic t Bool)
   , _buttonConfigEnabled      :: !(Dynamic t Bool)
-  , _buttonConfigTooltipRows  :: !(Dynamic t (M.Map Text Word))
+  , _buttonConfigTooltipRows  :: !(Dynamic t (M.Map Text Int))
   }
 
 makeFields ''ButtonConfig
@@ -112,7 +111,7 @@ instance Reflex t => Default (ButtonConfig t) where
 -- | A div button with a cooldown bar.
 button :: (MonadWidget t m, MonadReader (GameConfig t) m) => ButtonConfig t -> m (Event t ())
 button cfg = do
-  evTick <- asks (^.cooldownTick)
+  evTick <- asks (^.animationTick)
   -- TODO: better initial value for tLastClick
   t0 <- ((-1000) `addUTCTime`) <$> liftIO getCurrentTime
   rec
@@ -154,7 +153,7 @@ button cfg = do
 
 data CraftButtonConfig = CraftButtonConfig
   { _craftButtonConfigBuildingType   :: BuildingType
-  , _craftButtonConfigMaxCraftAmount :: Word
+  , _craftButtonConfigMaxCraftAmount :: Int
   , _craftButtonConfigAvailableMsg   :: Maybe Text
   , _craftButtonConfigBuildMsg       :: Maybe Text
   , _craftButtonConfigMaxMsg         :: Maybe Text
@@ -211,13 +210,12 @@ craftButton cfg = do
     -- Craft the building if there are enough materials
     let cost = (cfg^.craftCost) (st^.buildings)
         ss   = st^.stores
-        hasEnoughMaterials = cost `isSubmapOfByLT` ss
 
     if st^.roomTemp <= Cold
       then do
         tell ["builder just shivers."]
         return st
-    else if hasEnoughMaterials
+    else if cost .<=. ss
       then do
         when (isJust (cfg^.maxMsg) && (st^.buildings . at bdgType . non 0) == cfg^.maxCraftAmount - 1) $
           let Just msg = cfg^.maxMsg in tell [msg]
@@ -234,8 +232,6 @@ craftButton cfg = do
   where
     bdgType = cfg^.buildingType
 
-    isSubmapOfByLT = M.isSubmapOfBy (<=)
-
     -- Show button if one has already been built, or
     -- we have >= 1/2 * Wood, and all other components have been seen.
     isAvail :: GameState -> Bool
@@ -246,9 +242,10 @@ craftButton cfg = do
             b = st^.buildings
             c = (cfg^.craftCost) b
 
-storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k) => Text -> Text -> Dynamic t (M.Map k Word) -> m ()
+storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k, TextShow v)
+               => Text -> Dynamic t Text -> Dynamic t (M.Map k v) -> m ()
 storesFieldset className legend itemsMap = elClass "fieldset" className $ do
-  el "legend" $ text legend
+  el "legend" $ dynText legend
   listWithKey itemsMap $ \k dynV ->
     elClass "div" "storeRow" $ do
       elClass "div" "rowkey" $ text (showRowKey k)

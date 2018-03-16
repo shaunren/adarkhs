@@ -8,9 +8,9 @@ import           Control.Lens
 import           Control.Monad.Fix
 import           Data.Aeson
 import           Data.Aeson.Text             (encodeToLazyText)
+import           Data.Map                    (Map, isSubmapOfBy)
 import           Data.Text                   (Text, replace)
 import           Data.Text.Lazy              (toStrict)
-import           Data.Word
 import           Language.Javascript.JSaddle (FromJSString, JSM, JSString, JSVal,
                                               ToJSString,
                                               liftJSM,
@@ -85,44 +85,6 @@ setLocalStorageItem key val = do
 
 #endif
 
-
-infixr 4 ?+~, ?-~
-
-{-# INLINE (?+~) #-}
-(?+~) :: ASetter s t (Maybe Word) (Maybe Word) -> Word -> s -> t
-l ?+~ n = l %~ addn
-  where addn Nothing  = Nothing
-        addn (Just m) = Just (m + n)
-
-{-# INLINE (?-~) #-}
-(?-~) :: ASetter s t (Maybe Word) (Maybe Word) -> Word -> s -> t
-l ?-~ n = l %~ subn
-  where subn Nothing = Nothing
-        subn(Just m) | m >= n    = Just (m - n)
-                     | otherwise = Just m
-
--- | In the following relations, Nothing is smaller than any Just number.
-infix 4 ?<, ?>, ?<=, ?>=
-{-# INLINE (?<) #-}
-(?<) :: Ord a => Maybe a -> a -> Bool
-Nothing  ?< _  = True
-(Just x) ?< y  = x < y
-
-{-# INLINE (?>) #-}
-(?>) :: Ord a => Maybe a -> a -> Bool
-Nothing  ?> _  = False
-(Just x) ?> y  = x > y
-
-{-# INLINE (?<=) #-}
-(?<=) :: Ord a => Maybe a -> a -> Bool
-Nothing  ?<= _  = True
-(Just x) ?<= y  = x <= y
-
-{-# INLINE (?>=) #-}
-(?>=) :: Ord a => Maybe a -> a -> Bool
-Nothing  ?>= _  = False
-(Just x) ?>= y  = x >= y
-
 -- | Converts a text of form "SomeDataType" to "some data type".
 {-# INLINE toSpaceCase #-}
 toSpaceCase :: Text -> Text
@@ -137,3 +99,9 @@ showRowKey = toSpaceCase . showt
 {-# INLINABLE firedOnce #-}
 firedOnce :: (Reflex t, MonadHold t m, MonadFix m) => Event t a -> m (Dynamic t Bool)
 firedOnce ev = foldDynMaybe (\_ alreadyFired -> if alreadyFired then Nothing else Just True) False ev
+
+
+infix 4 .<=.
+{-# INLINE (.<=.) #-}
+(.<=.) :: (Ord k, Ord v) => Map k v -> Map k v -> Bool
+(.<=.) = isSubmapOfBy (<=)

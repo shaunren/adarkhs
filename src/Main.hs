@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE OverloadedLists        #-}
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE RecursiveDo            #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
@@ -61,7 +62,13 @@ notifyDyn :: (Reflex t, NotifyShow a) => Dynamic t a -> Event t [Text]
 notifyDyn dynA = notify $ updated dynA
 
 coolFire :: GameAction
-coolFire state  = return $ state & fireLevel %~ pred'
+coolFire state  =
+  if state^.builderLevel >= BuilderWorking && state^.fireLevel <= FireFlickering && state^.stores . at Wood . non 0 > 0
+  then do
+    tell ["builder stokes the fire."]
+    stokeFire state
+  else
+    return $ state & fireLevel %~ pred'
 
 stokeFire :: GameAction
 stokeFire state =
@@ -106,7 +113,12 @@ adjustBuilderLevel state =
   let bl' | (state^.fireLevel) >= FireFlickering && bl <= BuilderCollapsed = succ' bl
           | (state^.roomTemp) >= Warm && bl > BuilderCollapsed             = succ' bl
           | otherwise                                                      = bl
-  in return $ state & builderLevel .~ bl'
+      st' = state & builderLevel .~ bl'
+  in
+    if bl' == BuilderWorking
+      -- Builder helps gather wood
+      then return $ st' & incomes . at Builder ?~ (def & stores .~ (Wood =: 2))
+      else return st'
   where
     bl  = state^.builderLevel
 
@@ -129,6 +141,25 @@ gatherWood state = do
 
   where
     woodGathered = if (state^.buildings . at Cart . non 0) > 0 then 50 else 10
+
+addIncome :: IncomeSource -> Stores -> GameAction
+addIncome source ss state =
+  return $ state & incomes . at source ?~ (def & stores .~ ss)
+
+collectIncome :: GameAction
+collectIncome state =
+  let foldFun source val s =
+        -- TODO: Implement thieves
+        let s' = M.unionWith (+) s (val^.stores)
+        in
+          if val^.ticksLeft > 0 || any (<0) (M.elems s')
+          then s
+          else s'
+  in return $ state & incomes .~ incs
+                    & stores  %~ (\s -> M.foldrWithKey foldFun s incs)
+  where
+    incs = (state^.incomes) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
+    incomeTicks = 10
 --------------------------------------------------------------------------------------------------------------------------------------
 animationTickDt :: NominalDiffTime
 animationTickDt = 1/20
@@ -150,20 +181,21 @@ main = mainWidgetWithCss css body
 
 body :: MonadWidget t m => m ()
 body = do
-  t0 <- liftIO getCurrentTime
-  cooldownTick <- tickLossy animationTickDt t0
-  adjustRoomTempTick <- tickLossy adjustRoomTempDelay t0
-
   evPostBuild <- getPostBuild
 
   evInitState <- performEvent $ ffor evPostBuild $ const $ liftJSM $ do
     st <- liftJSM loadGameState
     return $ \_ -> return st
 
+  t0 <- liftIO getCurrentTime
+  animationTick'   <- tickLossy animationTickDt t0
+  evAdjustRoomTemp <- tickLossy adjustRoomTempDelay t0
+  evCollectIncome  <- tickLossy 1 t0
+
 
   elClass "div" "wrapper" $ do
     rec
-      (isSelectedMap, evUserActions) <- runGameT (GameConfig cooldownTick dynState) $
+      (isSelectedMap, evUserActions) <- runGameT (GameConfig animationTick' dynState) $
         tabDisplayDyn "header" "headerButton" "selected" "main" $ M.fromList
           [ (Room,    ( describeRoom <$> dynFireLevel
                       , constDyn True
@@ -173,47 +205,49 @@ body = do
                       , villageTab) )
           ]
 
-      adjustBuilderTick <- tickLossyFrom adjustBuilderDelay t0 (updated dynStokedForFirstTime)
       (dynState, dynActionMsgs) <- fmap splitDynPure $ foldDyn foldFun (def, []) $ mergeWith (>=>)
         [ (foldl1 (>=>)) <$> evUserActions
         , coolFire <$ evCoolFire
-        , adjustRoomTemp <$ adjustRoomTempTick
-        , adjustBuilderLevel <$ adjustBuilderTick
+        , adjustRoomTemp <$ evAdjustRoomTemp
+        , adjustBuilderLevel <$ evAdjustBuilder
         , unlockVillage <$ evUnlockVillage
         -- NOTE: using updated dynCurLocation directly causes infinite loop
         , arriveVillage <$ ffilter id (updated $ isSelectedMap ! Village)
+
+        , collectIncome <$ evCollectIncome
 
         , evInitState
         ]
       let evActionMsgs = ffilter (not . null) $ updated dynActionMsgs
 
       dynAllowedLocations <- dynField dynState allowedLocations
+
       dynBuilderLevel <- dynField dynState builderLevel
+      evAdjustBuilder <- fmap (gate $ current $ dynBuilderLevel <&> (< BuilderWorking)) $
+        tickLossyFrom adjustBuilderDelay t0 (updated dynStokedForFirstTime)
 
       evUnlockVillage <- delay unlockVillageDelay $ ffilter (== BuilderCollapsed) $ updated dynBuilderLevel
+      dynBuilderWorking <- holdUniqDyn $ dynBuilderLevel <&> (== BuilderWorking)
 
       -- Fires whenever firelevel updates, _or_ whenever fire is stoked.
       dynFireLevel <- fmap (fmap fst) . holdUniqDyn $ dynState <&> (\s -> (s^.fireLevel, s^.timesFireStoked))
-
       dynStokedForFirstTime <- holdUniqDyn $ dynState <&> (\s -> (s^.timesFireStoked) > 0)
-
       evCoolFire <- debounce coolFireDelay $ leftmost [updated dynFireLevel, evCoolFire]
 
     dynRoomTemp  <- dynField dynState roomTemp
 
     notificationsPane $ mergeWith (++)
-      [
-        notifyDyn dynFireLevel
+      [ evActionMsgs
+
+      , notifyDyn dynFireLevel
 
       , notifyDyn dynRoomTemp
       , notifyDyn dynBuilderLevel
-
-      , evActionMsgs
       ]
 
     elClass "div" "menu" $ do
       evSave <- menuButton "save."
-      performEvent_ $ ffor (tagPromptlyDyn dynState evSave) $ liftJSM . saveGameState
+      performEvent_ $ ffor (tag (current dynState) evSave) $ liftJSM . saveGameState
 
   where
 #ifdef DEBUG
@@ -221,11 +255,13 @@ body = do
     adjustRoomTempDelay = 5
     adjustBuilderDelay  = 5
     unlockVillageDelay  = 5
+    incomeDelay         = 2
 #else
     coolFireDelay       = 5 * 60
     adjustRoomTempDelay = 30
     adjustBuilderDelay  = 30
     unlockVillageDelay  = 15
+    incomeDelay         = 10
 #endif
 
     foldFun :: (GameState -> Writer [Text] GameState) -> (GameState, [Text]) -> (GameState, [Text])
@@ -242,11 +278,11 @@ body = do
 roomTab :: MonadGame t m => m ()
 roomTab = elClass "div" "location" $ do
   dynFireLevel <- holdUniqDyn =<< asksGameState fireLevel
-  dynStores    <- asksGameState stores
+  dynMaybeWood <- holdUniqDyn =<< asksGameState (stores . at Wood)
 
   evStokeFire <-
     button $ def & label        .~ fmap fireBtnLabel dynFireLevel
-                 & cooldownSecs .~ fmap (\s -> if (s ^. at Wood . non 1) > 0 then stokeCooldown else 0) dynStores
+                 & cooldownSecs .~ fmap stokeCooldown dynMaybeWood
   performAction evStokeFire stokeFire
 
   dynBuilderLevel <- holdUniqDyn =<< (fmap (fmap (^.builderLevel)) $ asks (^.gameState))
@@ -266,6 +302,55 @@ roomTab = elClass "div" "location" $ do
                       & buildMsg       ?~ "the rickety cart will carry more wood from the forest."
                       & craftCost      .~ const (Wood =: 30)
 
+    craftButton $ def & buildingType   .~ Hut
+                      & maxCraftAmount .~ 20
+                      & availableMsg   ?~ "builder says there are more wanderers. says they'll work, too."
+                      & buildMsg       ?~ "builder puts up a hut, out in the forest. says word will get around."
+                      & maxMsg         ?~ "no more room for huts."
+                      & craftCost      .~ (\b -> Wood =: (((b ^. at Hut . non 0) + 2) * 50))
+
+    craftButton $ def & buildingType   .~ Lodge
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "villagers could help hunt, given the means."
+                      & buildMsg       ?~ "the hunting lodge stands in the forest, a ways out of town."
+                      & craftCost      .~ const [(Wood, 200), (Fur, 10), (Meat, 5)]
+
+    craftButton $ def & buildingType   .~ TradingPost
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "a trading post would make commerce easier."
+                      & buildMsg       ?~ "now the nomads have a place to set up shop, they might stick around a while."
+                      & craftCost      .~ const [(Wood, 400), (Fur, 100)]
+
+    craftButton $ def & buildingType   .~ Tannery
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "builder says leather could be useful. says the villagers could make it."
+                      & buildMsg       ?~ "tannery goes up quick, on the edge of the village."
+                      & craftCost      .~ const [(Wood, 500), (Fur, 50)]
+
+    craftButton $ def & buildingType   .~ Smokehouse
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "should cure the meat, or it'll spoil. builder says she can fix something up."
+                      & buildMsg       ?~ "builder finishes the smokehouse. she looks hungry."
+                      & craftCost      .~ const [(Wood, 600), (Meat, 50)]
+
+    craftButton $ def & buildingType   .~ Workshop
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "builder says she could make finer things, if she had the tools."
+                      & buildMsg       ?~ "workshop's finally ready. builder's excited to get to it."
+                      & craftCost      .~ const [(Wood, 800), (Leather, 100), (Scales, 10)]
+
+    craftButton $ def & buildingType   .~ Steelworks
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "builder says villagers could make steel, given the tools."
+                      & buildMsg       ?~ "a haze falls over the village as the steelworks fires up."
+                      & craftCost      .~ const [(Wood, 1500), (Iron, 100), (Coal, 100)]
+
+    craftButton $ def & buildingType   .~ Armoury
+                      & maxCraftAmount .~ 1
+                      & availableMsg   ?~ "builder says it'd be useful to have a steady source of bullets."
+                      & buildMsg       ?~ "armoury's done, welcoming back the weapons of the past."
+                      & craftCost      .~ const [(Wood, 1500), (Steel, 100), (Sulphur, 50)]
+
   buttonCol (constDyn False)  $ do
     el "h1" $ text "craft:"
 
@@ -278,17 +363,20 @@ roomTab = elClass "div" "location" $ do
     button $ def & label        .~ constDyn "scales"
                  & cooldownSecs .~ constDyn 3 -- TEST
 
-  dynAllowedLocations <- asksGameState allowedLocations
+  dynAllowedLocations <- holdUniqDyn =<< asksGameState allowedLocations
   dynWidget ((Village `S.member`) <$> dynAllowedLocations) $ elClass "div" "storesCol" $
-    storesFieldset "stores" "stores" =<< asksGameState stores
+    storesFieldset "stores" (constDyn "stores") =<< holdUniqDyn =<< asksGameState stores
 
   return ()
 
   where
+    stokeCooldown Nothing  = stokeCooldown'
+    stokeCooldown (Just w) | w > 0     = stokeCooldown'
+                           | otherwise = 0
 #ifdef DEBUG
-    stokeCooldown = 1
+    stokeCooldown' = 1
 #else
-    stokeCooldown = 10
+    stokeCooldown' = 10
 #endif
 
     buttonCol isVisible w = dynWidget isVisible $ elClass "div" "roomButtonCol" w >> return ()
@@ -304,8 +392,10 @@ villageTab = elClass "div" "location" $ do
                  & cooldownSecs .~ constDyn gatherWoodCooldown
   performAction evGatherWood gatherWood
 
-  elClass "div" "storesCol" $
-    storesFieldset "stores" "stores" =<< asksGameState stores
+  dynBuildings <- holdUniqDyn =<< asksGameState buildings
+  elClass "div" "storesCol" $ do
+    storesFieldset "stores" (buildingsLegend <$> dynBuildings) dynBuildings
+    storesFieldset "stores" (constDyn "stores") =<< holdUniqDyn =<< asksGameState stores
   return ()
 
   where
@@ -314,3 +404,9 @@ villageTab = elClass "div" "location" $ do
 #else
     gatherWoodCooldown = 60
 #endif
+
+    buildingsLegend b
+      | h <= 0    = "forest"
+      | h == 1    = "hut"
+      | otherwise = "village"
+      where h = b ^. at Hut . non 0
