@@ -8,7 +8,8 @@
 {-# LANGUAGE OverloadedStrings      #-}
 {-# LANGUAGE TemplateHaskell        #-}
 {-# LANGUAGE TypeSynonymInstances   #-}
-{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedLists        #-}
+{-# LANGUAGE StandaloneDeriving     #-}
 module State where
 
 import           Control.Lens
@@ -18,10 +19,11 @@ import           Data.Aeson
 import           Data.Default
 import qualified Data.Map.Strict      as M
 import qualified Data.Set             as S
-import           Data.Text            (Text)
+import           Data.Text            (Text, pack, unpack)
 import           GHC.Generics
 import           Reflex
 import           Reflex.Dom           (MonadWidget)
+import           System.Random        (StdGen)
 import           TextShow.TH
 
 class NotifyShow a where
@@ -66,7 +68,7 @@ instance NotifyShow BuilderLevel where
   showN BuilderSleeping  = "the stranger in the corner stops shivering. her breathing calms."
   showN BuilderWorking   = "the stranger is standing by the fire. she says she can help. says she builds things."
 
-data StoreType = Wood | Fur | Meat | Scales | Leather | Iron | Coal | Steel | Sulphur
+data StoreType = Wood | Fur | Meat | Bait | Teeth | Cloth | Scales | Leather | Iron | Coal | Steel | Sulphur | Charm
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 $(deriveTextShow ''StoreType)
@@ -98,6 +100,23 @@ instance Default IncomeValue where
 
 type Incomes = M.Map IncomeSource IncomeValue
 
+data RandomGenType = RNGTrap | RNGWorld
+  deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
+
+instance Eq StdGen where
+  g == g' = show g == show g'
+
+instance ToJSON StdGen where
+  {-# INLINE toJSON #-}
+  toJSON = String . pack . show
+
+instance FromJSON StdGen where
+  {-# INLINE parseJSON #-}
+  parseJSON = withText "Text" $ return . read . unpack
+
+type RandomGens = M.Map RandomGenType StdGen
+
+
 data GameState = GameState
   { _gameStateCurrentLocation  :: !Location
   , _gameStateAllowedLocations :: !(S.Set Location)
@@ -112,13 +131,14 @@ data GameState = GameState
   , _gameStateBuildings        :: !Buildings
   , _gameStateBuildingsAvailable :: !(S.Set BuildingType)
   , _gameStateIncomes          :: !Incomes
+  , _gameStateRandomGens       :: !RandomGens
   } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
 
 makeFields ''GameState
 
 instance Default GameState where
   {-# INLINE def #-}
-  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE 0 [] [] [] [] []
+  def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE 0 [] [] [] [] [] []
 
 data GameConfig t = GameConfig
   { _gameConfigAnimationTick :: Event t TickInfo

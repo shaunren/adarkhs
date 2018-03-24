@@ -10,17 +10,18 @@
 {-# LANGUAGE ScopedTypeVariables    #-}
 {-# LANGUAGE TemplateHaskell        #-}
 {-# LANGUAGE TypeFamilies           #-}
-
 module Main where
 
 import           Control.Lens
 import           Control.Monad               (unless, when)
+import           Control.Monad.Random.Strict
 import           Control.Monad.Reader
 import           Control.Monad.Writer.Stricter
 import           Control.Monad.Writer.Class
 import           Data.Aeson
 import           Data.Default
 import           Data.FileEmbed
+import           Data.List                   (foldl1')
 import qualified Data.Map                    as M
 import           Data.Map                    ((!))
 import           Data.Maybe                  (fromMaybe, fromJust, listToMaybe, isJust)
@@ -31,6 +32,7 @@ import           Data.Time.Clock
 import           Foreign.JavaScript.Utils    (jsonDecode)
 import           Language.Javascript.JSaddle (JSM, JSString, JSVal, liftJSM,
                                               textToJSString, toJSVal)
+import           System.Random               (RandomGen, StdGen, newStdGen, split, randomR, random)
 
 import           Reflex.Dom                  hiding (button)
 import           TextShow
@@ -146,6 +148,43 @@ gatherWood state = do
   where
     woodGathered = if (state^.buildings . at Cart . non 0) > 0 then 50 else 10
 
+checkTraps :: GameAction
+checkTraps state = do
+  let (dropsList, rng') = flip runRand rng $ replicateM numDrops $ do
+        roll :: Float <- getRandom
+        let cutoffMap = [ (0.5, Fur)
+                        , (0.75, Meat)
+                        , (0.85, Scales)
+                        , (0.93, Teeth)
+                        , (0.995, Cloth)
+                        , (1, Charm)
+                        ]
+            Just (_, item) = M.lookupGE roll cutoffMap
+        return $ item =: 1
+
+  let drops = foldl1' (M.unionWith (+)) dropsList
+
+  -- Emit drop messages
+  tell . map dropMsg $ M.keys drops
+
+  return $ state & stores                  %~ M.unionWith (+) drops
+                 & randomGens . at RNGTrap ?~ rng'
+  where
+    numTraps = state^.buildings . at Trap . non 0
+    numBait  = state^.stores . at Bait . non 0
+    numDrops = numTraps + min numBait numTraps
+
+    Just rng = state^.randomGens . at RNGTrap
+
+    dropMsg :: StoreType -> Text
+    dropMsg Fur    = "scraps of fur."
+    dropMsg Meat   = "bits of meat."
+    dropMsg Scales = "strange scales."
+    dropMsg Teeth  = "scattered teeth."
+    dropMsg Cloth  = "tattered cloth."
+    dropMsg Charm  = "a crudely made charm."
+    dropMsg _      = error "Invalid dropMsg type"
+
 addIncome :: IncomeSource -> Stores -> GameAction
 addIncome source ss state =
   return $ state & incomes . at source ?~ (def & stores .~ ss)
@@ -164,6 +203,7 @@ collectIncome state =
   where
     incs = (state^.incomes) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
     incomeTicks = 10
+
 --------------------------------------------------------------------------------------------------------------------------------------
 animationTickDt :: NominalDiffTime
 animationTickDt = 1/20
@@ -176,7 +216,17 @@ saveGameState st = setLocalStorageItem "gameState" =<< jsonEncode st
 loadGameState :: JSM GameState
 loadGameState = do
   maybeState <- (jsonDecode =<<) <$> getLocalStorageItem "gameState"
-  return $ fromMaybe def maybeState
+  case maybeState of
+    Just s  -> return s
+    Nothing -> do
+      -- Create a RNG for every RandomGensType type.
+      rngs <- fmap M.fromList $ mapM newRngPair [toEnum 0 ..]
+      return $ def & randomGens .~ rngs
+
+  where
+    newRngPair k = do
+      rng <- liftIO newStdGen
+      return (k, rng)
 
 --------------------------------------------------------------------------------------------------------------------------------------
 main :: IO ()
@@ -187,7 +237,7 @@ body :: MonadWidget t m => m ()
 body = do
   evPostBuild <- getPostBuild
 
-  evInitState <- performEvent $ ffor evPostBuild $ const $ liftJSM $ do
+  evInitState <- performEvent $ ffor evPostBuild $ const $ do
     st <- liftJSM loadGameState
     return $ \_ -> return st
 
@@ -231,7 +281,6 @@ body = do
         tickLossyFrom adjustBuilderDelay t0 (updated dynStokedForFirstTime)
 
       evUnlockVillage <- delay unlockVillageDelay $ ffilter (== BuilderCollapsed) $ updated dynBuilderLevel
-      dynBuilderWorking <- holdUniqDyn $ dynBuilderLevel <&> (== BuilderWorking)
 
       -- Fires whenever firelevel updates, _or_ whenever fire is stoked.
       dynFireLevel <- fmap (fmap fst) . holdUniqDyn $ dynState <&> (\s -> (s^.fireLevel, s^.timesFireStoked))
@@ -391,14 +440,21 @@ roomTab = elClass "div" "location" $ do
 
 villageTab :: MonadGame t m => m ()
 villageTab = elClass "div" "location" $ do
+  dynBuildings  <- holdUniqDyn =<< asksGameState buildings
+  dynPopulation <- holdUniqDyn =<< asksGameState population
+  let dynHuts  = dynBuildings <&> (^. at Hut . non 0)
+
   evGatherWood <-
     button $ def & label        .~ constDyn "gather wood"
                  & cooldownSecs .~ constDyn gatherWoodCooldown
   performAction evGatherWood gatherWood
 
-  dynBuildings  <- holdUniqDyn =<< asksGameState buildings
-  dynPopulation <- holdUniqDyn =<< asksGameState population
-  let dynHuts = dynBuildings <&> (^. at Hut . non 0)
+  evCheckTraps <-
+    button $ def & label        .~ constDyn "check traps"
+                 & cooldownSecs .~ constDyn checkTrapsCooldown
+                 & visible      .~ (dynBuildings <&> (has $ ix Trap))
+                 & enabled      .~ (dynBuildings <&> (\b -> b ^. at Trap . non 0 > 0))
+  performAction evCheckTraps checkTraps
 
   elClass "div" "storesCol" $ do
     storesFieldset "stores" (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildings
@@ -408,8 +464,10 @@ villageTab = elClass "div" "location" $ do
   where
 #ifdef DEBUG
     gatherWoodCooldown = 1
+    checkTrapsCooldown = 1
 #else
     gatherWoodCooldown = 60
+    checkTrapsCooldown = 90
 #endif
 
     buildingsLegend h
