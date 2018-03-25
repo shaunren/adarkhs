@@ -150,17 +150,12 @@ gatherWood state = do
 
 checkTraps :: GameAction
 checkTraps state = do
-  let (dropsList, rng') = flip runRand rng $ replicateM numDrops $ do
-        roll :: Float <- getRandom
-        let cutoffMap = [ (0.5, Fur)
-                        , (0.75, Meat)
-                        , (0.85, Scales)
-                        , (0.93, Teeth)
-                        , (0.995, Cloth)
-                        , (1, Charm)
-                        ]
-            Just (_, item) = M.lookupGE roll cutoffMap
-        return $ item =: 1
+  let
+    Just rng = state^.randomGens . at RNGTrap
+    (dropsList, rng') = flip runRand rng $ replicateM numDrops $ do
+      roll :: Float <- getRandom
+      let Just (_, item) = M.lookupGE roll rollCutoffMap
+      return $ item =: 1
 
   let drops = foldl1' (M.unionWith (+)) dropsList
 
@@ -174,7 +169,13 @@ checkTraps state = do
     numBait  = state^.stores . at Bait . non 0
     numDrops = numTraps + min numBait numTraps
 
-    Just rng = state^.randomGens . at RNGTrap
+    rollCutoffMap = [ (0.5,   Fur)
+                    , (0.75,  Meat)
+                    , (0.85,  Scales)
+                    , (0.93,  Teeth)
+                    , (0.995, Cloth)
+                    , (1,     Charm)
+                    ]
 
     dropMsg :: StoreType -> Text
     dropMsg Fur    = "scraps of fur."
@@ -204,6 +205,29 @@ collectIncome state =
     incs = (state^.incomes) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
     incomeTicks = 10
 
+increasePopulation :: GameAction
+increasePopulation state
+  | space > 0 = do
+      let
+        Just rng = state^.randomGens . at RNGWanderer
+
+        (p',g) = explodingDie [8,8, 5,5,5, 3,3] rng
+        p      = min p' space
+        msg | p == 1    = "a stranger arrives in the night."
+            | p < 5     = "a weathered family takes up in one of the huts."
+            | p < 10    = "a small group arrives, all dust and bones."
+            | p < 30    = "a convoy lurches in, equal parts worry and hope."
+            | otherwise = "the town's booming. word does get around."
+
+      tell [msg]
+      return $ state & population                  +~ p
+                     & randomGens . at RNGWanderer ?~ g
+
+  | otherwise = return state
+
+  where
+    capacity = (state^.buildings . at Hut . non 0) * hutCapacity
+    space    = capacity - state^.population
 --------------------------------------------------------------------------------------------------------------------------------------
 animationTickDt :: NominalDiffTime
 animationTickDt = 1/20
@@ -246,6 +270,9 @@ body = do
   evAdjustRoomTemp <- tickLossy adjustRoomTempDelay t0
   evCollectIncome  <- tickLossy 1 t0
 
+  rng <- liftIO newStdGen
+  evIncreasePopulation <- poissonLossy rng incrPopulationRate t0
+
 
   elClass "div" "wrapper" $ do
     rec
@@ -269,6 +296,8 @@ body = do
         , arriveVillage <$ ffilter id (updated $ isSelectedMap ! Village)
 
         , collectIncome <$ evCollectIncome
+
+        , increasePopulation <$ evIncreasePopulation
 
         , evInitState
         ]
@@ -309,12 +338,14 @@ body = do
     adjustBuilderDelay  = 5
     unlockVillageDelay  = 5
     incomeDelay         = 2
+    incrPopulationRate  = 1/10   -- In Hz
 #else
     coolFireDelay       = 5 * 60
     adjustRoomTempDelay = 30
     adjustBuilderDelay  = 30
     unlockVillageDelay  = 15
     incomeDelay         = 10
+    incrPopulationRate  = 1/75   -- In Hz
 #endif
 
     foldFun :: (GameState -> Writer [Text] GameState) -> (GameState, [Text]) -> (GameState, [Text])

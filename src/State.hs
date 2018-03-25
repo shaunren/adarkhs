@@ -100,7 +100,7 @@ instance Default IncomeValue where
 
 type Incomes = M.Map IncomeSource IncomeValue
 
-data RandomGenType = RNGTrap | RNGWorld
+data RandomGenType = RNGTrap | RNGWanderer | RNGWorld
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 instance Eq StdGen where

@@ -21,6 +21,7 @@ import           JSDOM.Storage               (getItem, setItem)
 import           JSDOM.Window                (getLocalStorage)
 import           JSDOM.Types                 (Nullable(..), nullableToMaybe)
 import           Reflex
+import           System.Random               (RandomGen, randomR)
 import           TextShow
 
 {-# INLINE monoidGuard #-}
@@ -105,3 +106,12 @@ infix 4 .<=.
 {-# INLINE (.<=.) #-}
 (.<=.) :: (Ord k, Ord v) => Map k v -> Map k v -> Bool
 (.<=.) = isSubmapOfBy (<=)
+
+-- Die roll that explodes on the largest value.
+explodingDie :: RandomGen g => [Int] -> g -> (Int, g)
+explodingDie [] g = (0,g)
+explodingDie (n:ns) g =
+  let (x,g1) = randomR (1,n) g
+  in if x == n
+     then let (x',g2) = explodingDie ns g1 in (x+x', g2)
+     else (x,g1)
