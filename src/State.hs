@@ -68,7 +68,7 @@ instance NotifyShow BuilderLevel where
   showN BuilderSleeping  = "the stranger in the corner stops shivering. her breathing calms."
   showN BuilderWorking   = "the stranger is standing by the fire. she says she can help. says she builds things."
 
-data StoreType = Wood | Fur | Meat | Bait | Teeth | Cloth | Scales | Leather | Iron | Coal | Steel | Sulphur | Charm
+data StoreType = Wood | Fur | Meat | Bait | CuredMeat | Teeth | Cloth | Scales | Leather | Iron | Coal | Steel | Sulphur | Charm | Bullets
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 $(deriveTextShow ''StoreType)
@@ -82,23 +82,44 @@ $(deriveTextShow ''BuildingType)
 type Stores = M.Map StoreType Int
 type Buildings = M.Map BuildingType Int
 
-data IncomeSource = Builder | Gatherer
+data WorkerType = Builder | Gatherer | Hunter | Trapper | Tanner | Charcutier | IronMiner | CoalMiner | SulphurMiner | Steelworker | Armourer
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
-$(deriveTextShow ''IncomeSource)
+$(deriveTextShow ''WorkerType)
 
-data IncomeValue = IncomeValue
-  { _incomeValueStores    :: !Stores
-  , _incomeValueTicksLeft :: !Int
+data WorkerData = WorkerData
+  { _workerDataNumWorkers :: !Int
+  , _workerDataTicksLeft  :: !Int
   } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
 
-makeFields ''IncomeValue
+makeFields ''WorkerData
 
-instance Default IncomeValue where
+instance Default WorkerData where
   {-# INLINE def #-}
-  def = IncomeValue [] 0
+  def = WorkerData 0 0
 
-type Incomes = M.Map IncomeSource IncomeValue
+workerIncomeStores :: M.Map WorkerType Stores
+workerIncomeStores = [ (Builder,  [(Wood, 2)])
+                     , (Gatherer, [(Wood, 1)])
+                     , (Hunter, [(Fur, 1), (Meat, 1)])
+                     , (Trapper, [(Meat, -1), (Bait, 1)])
+                     , (Tanner, [(Fur, -5), (Leather, 1)])
+                     , (Charcutier, [(Meat, -5), (Wood, -5), (CuredMeat, 1)])
+                     , (IronMiner, [(CuredMeat, -1), (Iron, 1)])
+                     , (CoalMiner, [(CuredMeat, -1), (Coal, 1)])
+                     , (SulphurMiner, [(CuredMeat, -1), (Sulphur, 1)])
+                     , (Steelworker, [(Iron, -1), (Coal, -1), (Steel, 1)])
+                     , (Armourer, [(Steel, -1), (Sulphur, -1), (Bullets, 1)])
+                     ]
+
+{-# INLINE getIncomeStores #-}
+getIncomeStores :: WorkerType -> WorkerData -> Stores
+getIncomeStores w d
+  | n < 1     = []
+  | otherwise = (workerIncomeStores ^. at w . _Just) & traverse *~ n
+  where n = d^.numWorkers
+
+type Workers = M.Map WorkerType WorkerData
 
 data RandomGenType = RNGTrap | RNGWanderer | RNGWorld
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
@@ -130,7 +151,7 @@ data GameState = GameState
   , _gameStateStores           :: !Stores
   , _gameStateBuildings        :: !Buildings
   , _gameStateBuildingsAvailable :: !(S.Set BuildingType)
-  , _gameStateIncomes          :: !Incomes
+  , _gameStateWorkers          :: !Workers
   , _gameStateRandomGens       :: !RandomGens
   } deriving (Eq, Show, Read, Generic, ToJSON, FromJSON)
 

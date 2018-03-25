@@ -98,7 +98,7 @@ stokeFire state =
         | otherwise      = succ' fl
 
     updateWood st
-      | villageUnlocked && hasEnoughWood = st & at Wood %~ (\(Just w) -> Just (w-woodRequired))
+      | villageUnlocked && hasEnoughWood = st & at Wood . _Just -~ woodRequired
       | otherwise                        = st
 
     -- Pieces of wood required to light/stoke fire
@@ -123,7 +123,7 @@ adjustBuilderLevel state =
   in
     if bl' == BuilderWorking
       -- Builder helps gather wood
-      then return $ st' & incomes . at Builder ?~ (def & stores .~ (Wood =: 2))
+      then return $ st' & workers . at Builder ?~ (def & numWorkers .~ 1)
       else return st'
   where
     bl  = state^.builderLevel
@@ -186,23 +186,19 @@ checkTraps state = do
     dropMsg Charm  = "a crudely made charm."
     dropMsg _      = error "Invalid dropMsg type"
 
-addIncome :: IncomeSource -> Stores -> GameAction
-addIncome source ss state =
-  return $ state & incomes . at source ?~ (def & stores .~ ss)
-
 collectIncome :: GameAction
 collectIncome state =
-  let foldFun source val s =
+  let foldFun worker wdata s =
         -- TODO: Implement thieves
-        let s' = M.unionWith (+) s (val^.stores)
+        let s' = M.unionWith (+) s (getIncomeStores worker wdata)
         in
-          if val^.ticksLeft > 0 || any (<0) (M.elems s')
+          if wdata^.ticksLeft > 0 || any (<0) (M.elems s')
           then s
           else s'
-  in return $ state & incomes .~ incs
-                    & stores  %~ (\s -> M.foldrWithKey foldFun s incs)
+  in return $ state & workers .~ ws
+                    & stores  %~ (\s -> M.foldrWithKey foldFun s ws)
   where
-    incs = (state^.incomes) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
+    ws = (state^.workers) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
     incomeTicks = 10
 
 increasePopulation :: GameAction
