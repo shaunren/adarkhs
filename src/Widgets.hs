@@ -11,7 +11,7 @@
 module Widgets where
 
 import           Control.Lens
-import           Control.Monad              (when)
+import           Control.Monad              (void, when)
 import           Control.Monad.Fix
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader.Class
@@ -93,12 +93,34 @@ dynWidget' isVisible widget = do
   where w False = return never
         w True  = widget
 
+data TooltipRow = TooltipRow
+ { _tooltipRowKeyText     :: !Text
+ , _tooltipRowValueText   :: !Text
+ , _tooltipRowClasses     :: !Text
+ } deriving (Eq, Show)
+
+instance Default TooltipRow where
+  def = TooltipRow "" "" ""
+
+makeFields ''TooltipRow
+
+tooltip :: MonadWidget t m => Dynamic t [TooltipRow] -> m ()
+tooltip rows =
+  void $ dynWidget ((not . null) <$> rows) $
+    elClass "div" "tooltip bottom right" $ do
+      simpleList rows $ \dynRow -> do
+        let cl = dynRow <&> (^.classes)
+        elDynClass "div" (("rowkey " <>) <$> cl) $ dynText $ dynRow <&> (^.keyText)
+        elDynClass "div" (("rowval " <>) <$> cl) $ dynText $ dynRow <&> (^.valueText)
+      return ()
+
+
 data ButtonConfig t = ButtonConfig
   { _buttonConfigLabel        :: !(Dynamic t Text)
   , _buttonConfigCooldownSecs :: !(Dynamic t Float)
   , _buttonConfigVisible      :: !(Dynamic t Bool)
   , _buttonConfigEnabled      :: !(Dynamic t Bool)
-  , _buttonConfigTooltipRows  :: !(Dynamic t (M.Map Text Int))
+  , _buttonConfigTooltipRows  :: !(Dynamic t [TooltipRow])
   }
 
 makeFields ''ButtonConfig
@@ -106,7 +128,7 @@ makeFields ''ButtonConfig
 
 instance Reflex t => Default (ButtonConfig t) where
   {-# INLINABLE def #-}
-  def = ButtonConfig "button" (constDyn 0) (constDyn True) (constDyn True) (constDyn M.empty)
+  def = ButtonConfig "button" (constDyn 0) (constDyn True) (constDyn True) (constDyn [])
 
 -- | A div button with a cooldown bar.
 button :: (MonadWidget t m, MonadReader (GameConfig t) m) => ButtonConfig t -> m (Event t ())
@@ -140,12 +162,7 @@ button cfg = do
 
       elDynAttr "div" cooldownAttrs blank
 
-      -- Tooltip
-      dynWidget ((not . M.null) <$> cfg^.tooltipRows) $ elClass "div" "tooltip bottom right" $ do
-        listWithKey (cfg^.tooltipRows) $ \k dynV -> do
-          elClass "div" "rowkey" $ text k
-          elClass "div" "rowval" $ dynText $ showt <$> dynV
-        return ()
+      tooltip $ cfg^.tooltipRows
 
     let evClick = gate (current clicksAllowed) $ domEvent Click e
   return evClick
@@ -204,7 +221,9 @@ craftButton cfg = do
   evBuild <- button $ def & label       .~ constDyn (toSpaceCase $ showt bdgType)
                           & visible     .~ isAvailable
                           & enabled     .~ lessThanMax
-                          & tooltipRows .~ fmap (M.mapKeys showRowKey) dynCost
+                          & tooltipRows .~ fmap (\c -> [def & keyText   .~ showRowKey k
+                                                            & valueText .~ showt v
+                                                        | (k,v) <- M.toList c]) dynCost
 
   performAction evBuild $ \st -> do
     -- Craft the building if there are enough materials
@@ -242,14 +261,16 @@ craftButton cfg = do
             b = st^.buildings
             c = (cfg^.craftCost) b
 
-storesFieldset :: (MonadWidget t m, Enum k, Ord k, TextShow k, TextShow v)
-               => Text -> Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k v) -> m ()
+storesFieldset :: (MonadWidget t m, Ord k, TextShow k, TextShow v)
+               => Text -> Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k (v, [TooltipRow])) -> m ()
 storesFieldset className legend maybeLegend2 itemsMap = elClass "fieldset" className $ do
   el "legend" $ dynText legend
   when (isJust maybeLegend2) $
     elClass "span" "legend2" $ dynText (fromJust maybeLegend2)
-  listWithKey itemsMap $ \k dynV ->
+  listWithKey itemsMap $ \k dynV' -> do
+    let (dynV, dynTooltipRows) = splitDynPure dynV'
     elClass "div" "storeRow" $ do
       elClass "div" "rowkey" $ text (showRowKey k)
       elClass "div" "rowval" $ dynText $ showt <$> dynV
+      tooltip dynTooltipRows
   return ()

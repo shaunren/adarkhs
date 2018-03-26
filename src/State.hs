@@ -10,6 +10,9 @@
 {-# LANGUAGE TypeSynonymInstances   #-}
 {-# LANGUAGE OverloadedLists        #-}
 {-# LANGUAGE StandaloneDeriving     #-}
+
+{-# OPTIONS_GHC -Wno-orphans #-}
+
 module State where
 
 import           Control.Lens
@@ -120,6 +123,12 @@ getIncomeStores w d
   where n = d^.numWorkers
 
 type Workers = M.Map WorkerType WorkerData
+
+getStoreWorkerRates :: Workers -> M.Map StoreType (M.Map WorkerType Int)
+getStoreWorkerRates ws =
+  M.foldlWithKey
+    (\m worker wdata -> M.unionWith (M.unionWith (+)) m . M.map (M.singleton worker) $ getIncomeStores worker wdata)
+    [] ws
 
 data RandomGenType = RNGTrap | RNGWanderer | RNGWorld
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)

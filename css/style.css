@@ -235,6 +235,10 @@ div.storeRow {
     position: relative;
 }
 
+div.storeRow div.tooltip {
+    width: 85%;
+}
+
 div.rowkey {
     clear: both;
     float: left;
@@ -296,4 +300,9 @@ div.tooltip:hover {
 
 #event .button.disabled:hover > div.tooltip {
     display: block;
+}
+
+
+div.tooltip div.total {
+    font-weight: bold;
 }

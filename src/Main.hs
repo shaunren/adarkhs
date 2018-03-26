@@ -46,6 +46,10 @@ import           Widgets
 hutCapacity :: Int
 hutCapacity = 4
 
+incomeTicks :: Int
+incomeTicks = 10
+
+
 describeRoom :: FireLevel -> Text
 describeRoom fl
     | fl == minBound = "A Dark Room"
@@ -153,7 +157,7 @@ checkTraps state = do
   let
     Just rng = state^.randomGens . at RNGTrap
     (dropsList, rng') = flip runRand rng $ replicateM numDrops $ do
-      roll :: Float <- getRandom
+      roll <- getRandom
       let Just (_, item) = M.lookupGE roll rollCutoffMap
       return $ item =: 1
 
@@ -169,13 +173,14 @@ checkTraps state = do
     numBait  = state^.stores . at Bait . non 0
     numDrops = numTraps + min numBait numTraps
 
-    rollCutoffMap = [ (0.5,   Fur)
-                    , (0.75,  Meat)
-                    , (0.85,  Scales)
-                    , (0.93,  Teeth)
-                    , (0.995, Cloth)
-                    , (1,     Charm)
-                    ]
+    rollCutoffMap :: M.Map Float StoreType =
+      [ (0.5,   Fur)
+      , (0.75,  Meat)
+      , (0.85,  Scales)
+      , (0.93,  Teeth)
+      , (0.995, Cloth)
+      , (1,     Charm)
+      ]
 
     dropMsg :: StoreType -> Text
     dropMsg Fur    = "scraps of fur."
@@ -188,7 +193,7 @@ checkTraps state = do
 
 collectIncome :: GameAction
 collectIncome state =
-  let foldFun worker wdata s =
+  let foldFun s worker wdata =
         -- TODO: Implement thieves
         let s' = M.unionWith (+) s (getIncomeStores worker wdata)
         in
@@ -196,10 +201,9 @@ collectIncome state =
           then s
           else s'
   in return $ state & workers .~ ws
-                    & stores  %~ (\s -> M.foldrWithKey foldFun s ws)
+                    & stores  %~ (\s -> M.foldlWithKey foldFun s ws)
   where
     ws = (state^.workers) & traverse . ticksLeft %~ (\t -> if t <= 0 then incomeTicks else t-1)
-    incomeTicks = 10
 
 increasePopulation :: GameAction
 increasePopulation state
@@ -283,7 +287,7 @@ body = do
           ]
 
       (dynState, dynActionMsgs) <- fmap splitDynPure $ foldDyn foldFun (def, []) $ mergeWith (>=>)
-        [ (foldl1 (>=>)) <$> evUserActions
+        [ (foldl1' (>=>)) <$> evUserActions
         , coolFire <$ evCoolFire
         , adjustRoomTemp <$ evAdjustRoomTemp
         , adjustBuilderLevel <$ evAdjustBuilder
@@ -333,14 +337,12 @@ body = do
     adjustRoomTempDelay = 5
     adjustBuilderDelay  = 5
     unlockVillageDelay  = 5
-    incomeDelay         = 2
     incrPopulationRate  = 1/10   -- In Hz
 #else
     coolFireDelay       = 5 * 60
     adjustRoomTempDelay = 30
     adjustBuilderDelay  = 30
     unlockVillageDelay  = 15
-    incomeDelay         = 10
     incrPopulationRate  = 1/75   -- In Hz
 #endif
 
@@ -355,7 +357,7 @@ body = do
       (e,_) <- elClass' "span" "menuButton" $ text lbl
       return $ () <$ domEvent Click e
 
-roomTab :: MonadGame t m => m ()
+roomTab :: forall t m. MonadGame t m => m ()
 roomTab = elClass "div" "location" $ do
   dynFireLevel <- holdUniqDyn =<< asksGameState fireLevel
   dynMaybeWood <- holdUniqDyn =<< asksGameState (stores . at Wood)
@@ -444,8 +446,13 @@ roomTab = elClass "div" "location" $ do
                  & cooldownSecs .~ constDyn 3 -- TEST
 
   dynAllowedLocations <- holdUniqDyn =<< asksGameState allowedLocations
+
+  dynStores <- holdUniqDyn =<< asksGameState stores
+  dynWorkers <- holdUniqDyn =<< asksGameState workers
+  let dynStoresField = zipDynWith makeStoresField dynStores dynWorkers
+
   dynWidget ((Village `S.member`) <$> dynAllowedLocations) $ elClass "div" "storesCol" $
-    storesFieldset "stores" (constDyn "stores") Nothing =<< holdUniqDyn =<< asksGameState stores
+    storesFieldset "stores" (constDyn "stores") Nothing dynStoresField
 
   return ()
 
@@ -465,7 +472,7 @@ roomTab = elClass "div" "location" $ do
       | fl == minBound = "light fire"
       | otherwise      = "stoke fire"
 
-villageTab :: MonadGame t m => m ()
+villageTab :: forall t m. MonadGame t m => m ()
 villageTab = elClass "div" "location" $ do
   dynBuildings  <- holdUniqDyn =<< asksGameState buildings
   dynPopulation <- holdUniqDyn =<< asksGameState population
@@ -483,9 +490,16 @@ villageTab = elClass "div" "location" $ do
                  & enabled      .~ (dynBuildings <&> (\b -> b ^. at Trap . non 0 > 0))
   performAction evCheckTraps checkTraps
 
+
+  dynStores <- holdUniqDyn =<< asksGameState stores
+  dynWorkers <- holdUniqDyn =<< asksGameState workers
+
+  let dynStoresField = zipDynWith makeStoresField dynStores dynWorkers
+  let dynBuildingsField = dynBuildings <&> (traverse %~ (\v -> (v,[])))
+
   elClass "div" "storesCol" $ do
-    storesFieldset "stores" (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildings
-    storesFieldset "stores" (constDyn "stores") Nothing =<< holdUniqDyn =<< asksGameState stores
+    storesFieldset "stores" (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildingsField
+    storesFieldset "stores" (constDyn "stores") Nothing dynStoresField
   return ()
 
   where
@@ -503,3 +517,19 @@ villageTab = elClass "div" "location" $ do
       | otherwise = "village"
 
     populationLegend h p = "pop " <> showt p <> "/" <> showt (h * hutCapacity)
+
+makeStoresField :: Stores -> Workers -> M.Map StoreType (Int, [TooltipRow])
+makeStoresField ss ws = M.mapWithKey (\k v -> (v, toTooltip $ workerRates ^. at k . non [])) ss
+  where
+    workerRates = getStoreWorkerRates ws
+
+    toTooltip rates =
+      [def & keyText   .~ showRowKey k
+           & valueText .~ showValue v
+        | (k,v) <- M.toList rates]
+       ++
+      [def & keyText   .~ "total"
+           & valueText .~ showValue (M.foldl' (+) 0 rates)
+           & classes   .~ "total"]
+
+    showValue v = monoidGuard (v>0) "+" <> showt v <> " per " <> showt incomeTicks <> "s"
