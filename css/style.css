@@ -216,7 +216,6 @@ div.storesCol {
 }
 
 div.storesCol fieldset {
-    position: relative;
     z-index: 10;
     border: 1px solid black;
     cursor: default;
@@ -225,7 +224,7 @@ div.storesCol fieldset {
 
 fieldset span.legend2 {
     position: absolute;
-    top: -2.5ex;
+    top: 0px;
     right: 10px;
     background: white;
 }

@@ -452,7 +452,7 @@ roomTab = elClass "div" "location" $ do
   let dynStoresField = zipDynWith makeStoresField dynStores dynWorkers
 
   dynWidget ((Village `S.member`) <$> dynAllowedLocations) $ elClass "div" "storesCol" $
-    storesFieldset "stores" (constDyn "stores") Nothing dynStoresField
+    storesFieldset (constDyn "stores") Nothing dynStoresField
 
   return ()
 
@@ -498,8 +498,8 @@ villageTab = elClass "div" "location" $ do
   let dynBuildingsField = dynBuildings <&> (traverse %~ (\v -> (v,[])))
 
   elClass "div" "storesCol" $ do
-    storesFieldset "stores" (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildingsField
-    storesFieldset "stores" (constDyn "stores") Nothing dynStoresField
+    storesFieldset (buildingsLegend <$> dynHuts) (Just $ zipDynWith populationLegend dynHuts dynPopulation) dynBuildingsField
+    storesFieldset (constDyn "stores") Nothing dynStoresField
   return ()
 
   where

@@ -262,15 +262,17 @@ craftButton cfg = do
             c = (cfg^.craftCost) b
 
 storesFieldset :: (MonadWidget t m, Ord k, TextShow k, TextShow v)
-               => Text -> Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k (v, [TooltipRow])) -> m ()
-storesFieldset className legend maybeLegend2 itemsMap = elClass "fieldset" className $ do
-  el "legend" $ dynText legend
-  when (isJust maybeLegend2) $
-    elClass "span" "legend2" $ dynText (fromJust maybeLegend2)
-  listWithKey itemsMap $ \k dynV' -> do
-    let (dynV, dynTooltipRows) = splitDynPure dynV'
-    elClass "div" "storeRow" $ do
-      elClass "div" "rowkey" $ text (showRowKey k)
-      elClass "div" "rowval" $ dynText $ showt <$> dynV
-      tooltip dynTooltipRows
-  return ()
+               => Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k (v, [TooltipRow])) -> m ()
+storesFieldset legend maybeLegend2 itemsMap =
+  elAttr "div" ("style" =: "position: relative") $ -- Positioning fix for firefox
+  el "fieldset" $ do
+    el "legend" $ dynText legend
+    when (isJust maybeLegend2) $
+      elClass "span" "legend2" $ dynText (fromJust maybeLegend2)
+    listWithKey itemsMap $ \k dynV' -> do
+      let (dynV, dynTooltipRows) = splitDynPure dynV'
+      elClass "div" "storeRow" $ do
+        elClass "div" "rowkey" $ text (showRowKey k)
+        elClass "div" "rowval" $ dynText $ showt <$> dynV
+        tooltip dynTooltipRows
+    return ()
