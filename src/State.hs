@@ -77,7 +77,7 @@ data StoreType = Wood | Fur | Meat | Bait | CuredMeat | Teeth | Cloth | Scales |
 $(deriveTextShow ''StoreType)
 
 
-data BuildingType = Hut | Cart | Trap | Lodge | TradingPost | Tannery | Smokehouse | Workshop | Steelworks | Armoury
+data BuildingType = Hut | Cart | Trap | IronMine | CoalMine | SulphurMine | Lodge | TradingPost | Tannery | Smokehouse | Workshop | Steelworks | Armoury
   deriving (Eq, Ord, Enum, Show, Read, Generic, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 
 $(deriveTextShow ''BuildingType)
@@ -115,6 +115,8 @@ workerIncomeStores = [ (Builder,  [(Wood, 2)])
                      , (Armourer, [(Steel, -1), (Sulphur, -1), (Bullets, 1)])
                      ]
 
+type Workers = M.Map WorkerType WorkerData
+
 {-# INLINE getIncomeStores #-}
 getIncomeStores :: WorkerType -> WorkerData -> Stores
 getIncomeStores w d
@@ -122,8 +124,7 @@ getIncomeStores w d
   | otherwise = (workerIncomeStores ^. at w . _Just) & traverse *~ n
   where n = d^.numWorkers
 
-type Workers = M.Map WorkerType WorkerData
-
+{-# INLINE getStoreWorkerRates #-}
 getStoreWorkerRates :: Workers -> M.Map StoreType (M.Map WorkerType Int)
 getStoreWorkerRates ws =
   M.foldlWithKey
@@ -171,8 +172,10 @@ instance Default GameState where
   def = GameState Room [Room] False FireDead 0 Freezing BuilderDNE 0 [] [] [] [] [] []
 
 data GameConfig t = GameConfig
-  { _gameConfigAnimationTick :: Event t TickInfo
-  , _gameConfigGameState     :: Dynamic t GameState
+  { _gameConfigAnimationTick :: !(Event t TickInfo)
+  , _gameConfigGameState     :: !(Dynamic t GameState)
+  , _gameConfigStores        :: !(Dynamic t Stores)    -- holdUniqDyn
+  , _gameConfigBuildings     :: !(Dynamic t Buildings) -- holdUniqDyn
   }
 
 makeFields ''GameConfig

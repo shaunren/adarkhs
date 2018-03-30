@@ -14,7 +14,7 @@ flag debug
 executable adarkhs
   hs-source-dirs:      src
   main-is:             Main.hs
-  other-modules:       State, Utils, Widgets
+  other-modules:       Constants, State, Utils, Widgets
   build-depends:       base >=4.9 && <4.10
                      , containers >=0.5.7 && <0.6
                      , text >=1 && <2
@@ -42,6 +42,7 @@ executable adarkhs
 
   if impl(ghcjs)
     ghc-options:    -Wall -Wno-unused-do-bind -O2 -dedupe
+    cpp-options:    -DGHCJS_GC_INTERVAL=60000
   else
     ghc-options:    -Wall -Wno-unused-do-bind -O2
 

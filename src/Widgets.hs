@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns           #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -10,6 +11,7 @@
 
 module Widgets where
 
+import           Control.Applicative        (liftA3)
 import           Control.Lens
 import           Control.Monad              (void, when)
 import           Control.Monad.Fix
@@ -17,7 +19,7 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Reader.Class
 import           Control.Monad.Writer.Class
 import           Data.Default
-import qualified Data.Map                   as M
+import qualified Data.Map.Strict            as M
 import           Data.Maybe                 (isJust, fromJust, listToMaybe)
 import           Data.Monoid                ((<>))
 import qualified Data.Set                   as S
@@ -104,11 +106,11 @@ instance Default TooltipRow where
 
 makeFields ''TooltipRow
 
-tooltip :: MonadWidget t m => Dynamic t [TooltipRow] -> m ()
+tooltip :: (MonadWidget t m, Ord k) => Dynamic t (M.Map k TooltipRow) -> m ()
 tooltip rows =
   void $ dynWidget ((not . null) <$> rows) $
     elClass "div" "tooltip bottom right" $ do
-      simpleList rows $ \dynRow -> do
+      list rows $ \dynRow -> do
         let cl = dynRow <&> (^.classes)
         elDynClass "div" (("rowkey " <>) <$> cl) $ dynText $ dynRow <&> (^.keyText)
         elDynClass "div" (("rowval " <>) <$> cl) $ dynText $ dynRow <&> (^.valueText)
@@ -120,7 +122,7 @@ data ButtonConfig t = ButtonConfig
   , _buttonConfigCooldownSecs :: !(Dynamic t Float)
   , _buttonConfigVisible      :: !(Dynamic t Bool)
   , _buttonConfigEnabled      :: !(Dynamic t Bool)
-  , _buttonConfigTooltipRows  :: !(Dynamic t [TooltipRow])
+  , _buttonConfigTooltipRows  :: !(Dynamic t (M.Map Int TooltipRow))
   }
 
 makeFields ''ButtonConfig
@@ -128,12 +130,12 @@ makeFields ''ButtonConfig
 
 instance Reflex t => Default (ButtonConfig t) where
   {-# INLINABLE def #-}
-  def = ButtonConfig "button" (constDyn 0) (constDyn True) (constDyn True) (constDyn [])
+  def = ButtonConfig "button" (constDyn 0) (constDyn True) (constDyn True) (constDyn M.empty)
 
 -- | A div button with a cooldown bar.
 button :: (MonadWidget t m, MonadReader (GameConfig t) m) => ButtonConfig t -> m (Event t ())
 button cfg = do
-  evTick <- asks (^.animationTick)
+  evTick <- fmap (gate $ current $ cfg^.cooldownSecs <&> (>0)) $ asks (^.animationTick)
   -- TODO: better initial value for tLastClick
   t0 <- ((-1000) `addUTCTime`) <$> liftIO getCurrentTime
   rec
@@ -144,10 +146,11 @@ button cfg = do
                           attachWith (\tl tickInfo -> realToFrac $ (_tickInfo_lastUTC tickInfo) `diffUTCTime` tl)
                                      tLastClick evTick
 
-    let curCooldown = zipDynWith (\cs dt -> max 0 (cs-dt)) (cfg^.cooldownSecs) dtSinceLastClick
-        clicksAllowed = zipDynWith (\e c -> e && c <= 0) (cfg^.enabled) curCooldown
+    curCooldown <- holdUniqDyn $ zipDynWith (\cs dt -> max 0 (cs-dt)) (cfg^.cooldownSecs) dtSinceLastClick
+    let clicksAllowed = zipDynWith (\e c -> e && c <= 0) (cfg^.enabled) curCooldown
         attrs = zipDynWith (\v e -> monoidGuard (not v) ("style" =: "display:none;")
-                                      <> ("class" =: (   "button" <> monoidGuard (not e) (" disabled"))))
+                                      <> ("class" =: (   "button" <> monoidGuard (not e) (" disabled")))
+                                      )
                              (cfg^.visible) clicksAllowed
 
     (e,_) <- elDynAttr' "div" attrs $ do
@@ -185,12 +188,11 @@ instance Default CraftButtonConfig where
 
 craftButton :: MonadGame t m => CraftButtonConfig -> m ()
 craftButton cfg = do
-  dynState     <- asks (^.gameState)
-  dynBuildings <- asksGameState buildings
-  dynStores    <- asksGameState stores
+  dynStores    <- asks (^.stores)
+  dynBuildings <- asks (^.buildings)
+  dynBuildingsAvailable <- holdUniqDyn =<< asksGameState buildingsAvailable
 
-  let dynCost' = cfg^.craftCost <$> dynBuildings
-  dynCost <- holdUniqDyn dynCost'
+  dynCost <- holdUniqDyn (cfg^.craftCost <$> dynBuildings)
 
   let numCrafted = dynBuildings <&> (^. at bdgType . non 0)
 
@@ -198,7 +200,7 @@ craftButton cfg = do
 
   evPostBuild <- delay 0 =<< getPostBuild
 
-  let isAvailable' = isAvail <$> dynState
+  let isAvailable' = liftA3 isAvail dynBuildingsAvailable dynStores dynBuildings
       evAvailable' = leftmost
         [ attachWithMaybe (\old new -> if new && not old then Just True else Nothing)
                           (current isAvailable') (updated isAvailable')
@@ -221,9 +223,10 @@ craftButton cfg = do
   evBuild <- button $ def & label       .~ constDyn (toSpaceCase $ showt bdgType)
                           & visible     .~ isAvailable
                           & enabled     .~ lessThanMax
-                          & tooltipRows .~ fmap (\c -> [def & keyText   .~ showRowKey k
-                                                            & valueText .~ showt v
-                                                        | (k,v) <- M.toList c]) dynCost
+                          & tooltipRows .~ fmap (M.mapKeysMonotonic fromEnum .
+                                                 M.mapWithKey (\k v -> def & keyText   .~ showRowKey k
+                                                                           & valueText .~ showt v))
+                                                dynCost
 
   performAction evBuild $ \st -> do
     -- Craft the building if there are enough materials
@@ -253,16 +256,15 @@ craftButton cfg = do
 
     -- Show button if one has already been built, or
     -- we have >= 1/2 * Wood, and all other components have been seen.
-    isAvail :: GameState -> Bool
-    isAvail st =  (st^.buildingsAvailable & has (ix bdgType))
-               || ((s ^. at Wood . non 0) * 2 >= (c ^. at Wood . non 0)
-                   && M.isSubmapOfBy (\_ _ -> True) c s)
-      where s = st^.stores
-            b = st^.buildings
-            c = (cfg^.craftCost) b
+    isAvail :: S.Set BuildingType -> Stores -> Buildings -> Bool
+    isAvail bdgsAvail s b =
+      (bdgsAvail & has (ix bdgType))
+      || ((s ^. at Wood . non 0) * 2 >= (c ^. at Wood . non 0)
+          && M.isSubmapOfBy (\_ _ -> True) c s)
+      where c = (cfg^.craftCost) b
 
 storesFieldset :: (MonadWidget t m, Ord k, TextShow k, TextShow v)
-               => Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k (v, [TooltipRow])) -> m ()
+               => Dynamic t Text -> Maybe (Dynamic t Text) -> Dynamic t (M.Map k (v, M.Map Int TooltipRow)) -> m ()
 storesFieldset legend maybeLegend2 itemsMap =
   elAttr "div" ("style" =: "position: relative") $ -- Positioning fix for firefox
   el "fieldset" $ do
@@ -276,3 +278,37 @@ storesFieldset legend maybeLegend2 itemsMap =
         elClass "div" "rowval" $ dynText $ showt <$> dynV
         tooltip dynTooltipRows
     return ()
+
+workerDistributionPanel :: MonadGame t m => Dynamic t Workers -> m ()
+workerDistributionPanel dynWorkers =
+  elClass "div" "workerDistributionPanel" $ do
+    listWithKey dynWorkers $ \w dynWdata ->
+      when (w /= Builder) $
+        elClass "div" "workerRow" $ do
+          elClass "div" "rowkey" $ text (showRowKey w)
+          elClass "div" "rowval" $ do
+            el "span" $ dynText $ (\wd -> showt $ wd^.numWorkers) <$> dynWdata
+
+            -- Up/down buttons
+            when (w /= Gatherer) $ do
+              (eUp, _)     <- elClass' "div" "upBtn" blank
+              (eDn, _)     <- elClass' "div" "dnBtn" blank
+              (eUpMany, _) <- elClass' "div" "upManyBtn" blank
+              (eDnMany, _) <- elClass' "div" "dnManyBtn" blank
+
+              performAction (domEvent Click eUp)     $ increaseWorkers w 1
+              performAction (domEvent Click eDn)     $ increaseWorkers w (-1)
+              performAction (domEvent Click eUpMany) $ increaseWorkers w 10
+              performAction (domEvent Click eDnMany) $ increaseWorkers w (-10)
+          -- TODO: Tooltip
+    return ()
+
+ where
+   increaseWorkers :: WorkerType -> Int -> GameAction
+   increaseWorkers w n state =
+     return $ state & workers .~ ws'
+     where ws  = state^.workers
+           n'  = max (-(ws ^. at w . non def . numWorkers)) $      -- Cannot have negative numWorkers
+                 min (ws ^. at Gatherer . non def . numWorkers) n  -- Extra workers must be from Gatherer
+           ws' = ws & at w        . non def . numWorkers +~ n'
+                    & at Gatherer . non def . numWorkers -~ n'

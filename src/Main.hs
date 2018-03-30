@@ -9,6 +9,7 @@
 {-# LANGUAGE RecursiveDo            #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
 {-# LANGUAGE TemplateHaskell        #-}
+{-# LANGUAGE TupleSections          #-}
 {-# LANGUAGE TypeFamilies           #-}
 module Main where
 
@@ -22,7 +23,7 @@ import           Data.Aeson
 import           Data.Default
 import           Data.FileEmbed
 import           Data.List                   (foldl1')
-import qualified Data.Map                    as M
+import qualified Data.Map.Strict             as M
 import           Data.Map                    ((!))
 import           Data.Maybe                  (fromMaybe, fromJust, listToMaybe, isJust)
 import           Data.Monoid                 ((<>))
@@ -37,18 +38,13 @@ import           System.Random               (RandomGen, StdGen, newStdGen, spli
 import           Reflex.Dom                  hiding (button)
 import           TextShow
 
+import           Constants
 import           State
 import           Utils
 import           Widgets
 
 
 --------------------------------------------------------------------------------------------------------------------------------------
-hutCapacity :: Int
-hutCapacity = 4
-
-incomeTicks :: Int
-incomeTicks = 10
-
 
 describeRoom :: FireLevel -> Text
 describeRoom fl
@@ -220,18 +216,33 @@ increasePopulation state
             | otherwise = "the town's booming. word does get around."
 
       tell [msg]
-      return $ state & population                  +~ p
-                     & randomGens . at RNGWanderer ?~ g
+      return $ state & population                       +~ p
+                     & randomGens . at RNGWanderer      ?~ g
+                     -- Default to gatherers
+                     & workers . at Gatherer . non def . numWorkers +~ p
 
   | otherwise = return state
 
   where
     capacity = (state^.buildings . at Hut . non 0) * hutCapacity
     space    = capacity - state^.population
---------------------------------------------------------------------------------------------------------------------------------------
-animationTickDt :: NominalDiffTime
-animationTickDt = 1/20
 
+enableWorker :: Buildings -> GameAction
+enableWorker db state =
+  return $ state & workers %~ (\w -> M.union w newWorkers)
+  where
+    newWorkers = M.fromList . map (,def) $ concat [jobs ^. at k . non [] | k <- M.keys db]
+    jobs = [ (Lodge, [Hunter, Trapper])
+           , (Tannery, [Tanner])
+           , (Smokehouse, [Charcutier])
+           , (IronMine, [IronMiner])
+           , (CoalMine, [CoalMiner])
+           , (SulphurMine, [SulphurMiner])
+           , (Steelworks, [Steelworker])
+           , (Armoury, [Armourer])
+           ] :: M.Map BuildingType [WorkerType]
+
+--------------------------------------------------------------------------------------------------------------------------------------
 -- | Saves GameState to LocalStorage.
 saveGameState :: GameState -> JSM ()
 saveGameState st = setLocalStorageItem "gameState" =<< jsonEncode st
@@ -276,18 +287,18 @@ body = do
 
   elClass "div" "wrapper" $ do
     rec
-      (isSelectedMap, evUserActions) <- runGameT (GameConfig animationTick' dynState) $
+      (isSelectedMap, evUserActions) <- runGameT (GameConfig animationTick' dynState dynStores dynBuildings) $
         tabDisplayDyn "header" "headerButton" "selected" "main" $ M.fromList
           [ (Room,    ( describeRoom <$> dynFireLevel
                       , constDyn True
                       , roomTab) )
-          , (Village, ( dynState <&> (\s -> describeVillage $ s ^. buildings)
+          , (Village, ( describeVillage <$> dynBuildings
                       , (Village `S.member`) <$> dynAllowedLocations
                       , villageTab) )
           ]
 
       (dynState, dynActionMsgs) <- fmap splitDynPure $ foldDyn foldFun (def, []) $ mergeWith (>=>)
-        [ (foldl1' (>=>)) <$> evUserActions
+        [ (foldl1 (>=>)) <$> evUserActions
         , coolFire <$ evCoolFire
         , adjustRoomTemp <$ evAdjustRoomTemp
         , adjustBuilderLevel <$ evAdjustBuilder
@@ -296,12 +307,20 @@ body = do
         , arriveVillage <$ ffilter id (updated $ isSelectedMap ! Village)
 
         , collectIncome <$ evCollectIncome
-
         , increasePopulation <$ evIncreasePopulation
+        , enableWorker <$> evDiffBuildings
 
         , evInitState
         ]
       let evActionMsgs = ffilter (not . null) $ updated dynActionMsgs
+
+      dynStores    <- dynField dynState stores
+      dynBuildings <- dynField dynState buildings
+
+      let evDiffBuildings' =  attachWithMaybe (\old new -> let d = new `M.difference` old
+                                                          in if M.null d then Nothing else Just d)
+                                              (current dynBuildings) (updated dynBuildings)
+      evDiffBuildings <- delay 0 evDiffBuildings'
 
       dynAllowedLocations <- dynField dynState allowedLocations
 
@@ -357,10 +376,10 @@ body = do
       (e,_) <- elClass' "span" "menuButton" $ text lbl
       return $ () <$ domEvent Click e
 
-roomTab :: forall t m. MonadGame t m => m ()
+roomTab :: MonadGame t m => m ()
 roomTab = elClass "div" "location" $ do
   dynFireLevel <- holdUniqDyn =<< asksGameState fireLevel
-  dynMaybeWood <- holdUniqDyn =<< asksGameState (stores . at Wood)
+  dynMaybeWood <- fmap (<&> (^. at Wood)) $ asks (^. stores)
 
   evStokeFire <-
     button $ def & label        .~ fmap fireBtnLabel dynFireLevel
@@ -447,7 +466,7 @@ roomTab = elClass "div" "location" $ do
 
   dynAllowedLocations <- holdUniqDyn =<< asksGameState allowedLocations
 
-  dynStores <- holdUniqDyn =<< asksGameState stores
+  dynStores <- asks (^.stores)
   dynWorkers <- holdUniqDyn =<< asksGameState workers
   let dynStoresField = zipDynWith makeStoresField dynStores dynWorkers
 
@@ -472,9 +491,11 @@ roomTab = elClass "div" "location" $ do
       | fl == minBound = "light fire"
       | otherwise      = "stoke fire"
 
-villageTab :: forall t m. MonadGame t m => m ()
+villageTab :: MonadGame t m => m ()
 villageTab = elClass "div" "location" $ do
-  dynBuildings  <- holdUniqDyn =<< asksGameState buildings
+  dynStores    <- asks (^.stores)
+  dynBuildings <- asks (^.buildings)
+
   dynPopulation <- holdUniqDyn =<< asksGameState population
   let dynHuts  = dynBuildings <&> (^. at Hut . non 0)
 
@@ -491,8 +512,9 @@ villageTab = elClass "div" "location" $ do
   performAction evCheckTraps checkTraps
 
 
-  dynStores <- holdUniqDyn =<< asksGameState stores
   dynWorkers <- holdUniqDyn =<< asksGameState workers
+
+  workerDistributionPanel dynWorkers
 
   let dynStoresField = zipDynWith makeStoresField dynStores dynWorkers
   let dynBuildingsField = dynBuildings <&> (traverse %~ (\v -> (v,[])))
@@ -518,18 +540,27 @@ villageTab = elClass "div" "location" $ do
 
     populationLegend h p = "pop " <> showt p <> "/" <> showt (h * hutCapacity)
 
-makeStoresField :: Stores -> Workers -> M.Map StoreType (Int, [TooltipRow])
+makeStoresField :: Stores -> Workers -> M.Map StoreType (Int, M.Map Int TooltipRow)
 makeStoresField ss ws = M.mapWithKey (\k v -> (v, toTooltip $ workerRates ^. at k . non [])) ss
   where
     workerRates = getStoreWorkerRates ws
 
     toTooltip rates =
-      [def & keyText   .~ showRowKey k
-           & valueText .~ showValue v
-        | (k,v) <- M.toList rates]
-       ++
-      [def & keyText   .~ "total"
-           & valueText .~ showValue (M.foldl' (+) 0 rates)
-           & classes   .~ "total"]
+      let t = ratesToTooltipRows rates
+      in t
+      <> monoidGuard (not $ M.null rates)
+           (maxBound =:
+              (def & keyText   .~ "total"
+                   & valueText .~ showRateValue (M.foldl' (+) 0 rates)
+                   & classes   .~ "total"))
 
-    showValue v = monoidGuard (v>0) "+" <> showt v <> " per " <> showt incomeTicks <> "s"
+{-# INLINE ratesToTooltipRows #-}
+ratesToTooltipRows :: (TextShow k, Enum k) => M.Map k Int -> M.Map Int TooltipRow
+ratesToTooltipRows rates =
+  M.mapKeysMonotonic fromEnum $
+  M.mapWithKey (\k v -> def & keyText   .~ showRowKey k
+                            & valueText .~ showRateValue v) rates
+
+{-# INLINE showRateValue #-}
+showRateValue :: Int -> Text
+showRateValue v = monoidGuard (v>0) "+" <> showt v <> " per " <> showt incomeTicks <> "s"

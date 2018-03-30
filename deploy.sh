@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Compiling with ghcjs:
-stack haddock --stack-yaml=stack-ghcjs.yaml --ghc-options '-j'
+#stack haddock --stack-yaml=stack-ghcjs.yaml --ghc-options '-j'
 
 # Moving the generated files to the js folder:
 mkdir -p out

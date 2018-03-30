@@ -8,7 +8,7 @@ import           Control.Lens
 import           Control.Monad.Fix
 import           Data.Aeson
 import           Data.Aeson.Text             (encodeToLazyText)
-import           Data.Map                    (Map, isSubmapOfBy)
+import           Data.Map.Strict             (Map, isSubmapOfBy)
 import           Data.Text                   (Text, replace)
 import           Data.Text.Lazy              (toStrict)
 import           Language.Javascript.JSaddle (FromJSString, JSM, JSString, JSVal,

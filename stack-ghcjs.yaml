@@ -30,10 +30,6 @@ packages:
     # Latest develop comment at the time of writing
   extra-dep: true
 
-flags:
-  reflex-dom-core:
-    profile-reflex: false
-
 extra-deps: 
 - dependent-sum-template-0.0.0.6
 - ghcjs-dom-0.9.2.0
